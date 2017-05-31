@@ -1,0 +1,18 @@
+
+
+-- Query: UserIdByEmail
+
+select id@@int  from user where email = ?email@@string;
+
+
+-- Query: UserIdNameByEmail
+
+select id@@int, name@@string 
+from users 
+where email like ?email@@string;
+
+-- Query: NewUser
+
+insert into user values(?id@@int, ?email@@string, ?name@@string);
+
+
