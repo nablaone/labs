@@ -1,6 +1,6 @@
 package main
 
-//go:generate sqltpl main sample.sqlt sample_sqlt.go
+//go:generate go-sqltpl  sample.sqlt main.go
 
 import (
 	"database/sql"
@@ -27,6 +27,16 @@ func main() {
 
 	log.Println("Start")
 
-	outs, _ := UserIdNameByEmail(db, UserIdNameByEmailIn{Email: "foo@bar"})
-	log.Println(outs)
+	q := WithDB(db)
+
+	outs, _ := q.UserIdNameByEmail(UserIdNameByEmailQuery{Email: "foo@bar"})
+	log.Println("outs", outs)
+
+	// -- sqltpl: Ids
+	// select id@@int from user
+	// -- end
+
+	outs2, _ := q.Ids(IdsQuery{})
+	log.Println("outs2", outs2)
+
 }

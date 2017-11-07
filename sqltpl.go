@@ -1,4 +1,4 @@
-package main
+package sqltpl
 
 import (
 	"bufio"
@@ -7,6 +7,14 @@ import (
 	"io"
 	"regexp"
 	"strings"
+)
+
+const (
+	InsertQuery = iota
+	SelectQuery
+	ScalarSelectQuery
+	UpdateQuery
+	DeleteQuery
 )
 
 type Param struct {
@@ -22,7 +30,7 @@ type Query struct {
 	Query string
 }
 
-type Package struct {
+type QueryBundle struct {
 	Name    string
 	Queries []*Query
 }
@@ -46,7 +54,7 @@ func processInParams(query string) (string, []Param, error) {
 		}
 
 		ins = append(ins, p)
-		return fmt.Sprintf("$%d", count)
+		return fmt.Sprintf("$%d", count) // FIXME must be parametrized
 	}
 
 	resQuery := rx.ReplaceAllStringFunc(query, repl)
@@ -84,7 +92,7 @@ func parseQuery(query string) (Query, error) {
 	q, outs, err := processOutParams(q)
 
 	t := Query{
-		Name:  "foo",
+		Name:  "",
 		Ins:   ins,
 		Outs:  outs,
 		Query: q,
@@ -92,57 +100,117 @@ func parseQuery(query string) (Query, error) {
 	return t, err
 }
 
-func (t *Query) process() {
+func (t *Query) process() error {
 
-	q, ins, _ := processInParams(t.Query)
+	q, ins, err := processInParams(t.Query)
+	if err != nil {
+		return err
+	}
 
-	q, outs, _ := processOutParams(q)
+	q, outs, err := processOutParams(q)
+	if err != nil {
+		return err
+	}
 
 	t.Ins = ins
 	t.Outs = outs
 	t.Query = q
 
+	return nil
 }
 
-func ParsePackage(name string, r io.Reader) (Package, error) {
-	var res Package
-	res.Name = name
-	scanner := bufio.NewScanner(r)
+const (
+	beginToken   = "-- sqltpl:"
+	endToken     = "-- end"
+	startComment = "--"
+)
 
-	var t *Query
+type Parser struct {
+	TransformLine func(string) string
+	Context       string
+}
 
-	for scanner.Scan() {
-		line := scanner.Text()
+func NewSqlParser() *Parser {
+	return &Parser{
+		TransformLine: func(s string) string {
+			return s
+		},
+	}
+}
 
-		switch {
-		case strings.HasPrefix(line, "-- Query: "):
+func NewGoParser() *Parser {
+	var comment = "//"
 
-			name := line[len("-- Query: "):]
-			t = &Query{}
+	return &Parser{
+		TransformLine: func(s string) string {
+			line := strings.TrimLeft(s, "\t ")
 
-			res.Queries = append(res.Queries, t)
-			t.Name = name
+			if strings.HasPrefix(line, comment) {
 
-		case strings.HasPrefix(line, "--"):
+				line = line[len(comment):]
+				line = strings.TrimLeft(line, "\t ")
 
-		default:
-
-			if t != nil {
-				t.Query = t.Query + line
+				return line
 			}
 
+			return ""
+		},
+	}
+}
+
+func (p *Parser) Parse(r io.Reader) (*QueryBundle, error) {
+	var res QueryBundle
+	scanner := bufio.NewScanner(r)
+
+	var lineNumber int
+	var current *Query
+
+	for scanner.Scan() {
+		line := p.TransformLine(scanner.Text())
+		lineNumber++
+		switch {
+		case strings.HasPrefix(line, beginToken):
+
+			name := strings.TrimSpace(line[len(beginToken):])
+			current = &Query{}
+			current.Name = name
+
+		case strings.HasPrefix(line, endToken):
+
+			if current == nil {
+				return nil, fmt.Errorf("unexpected end token: %s:%d", p.Context, lineNumber)
+			}
+
+			res.Queries = append(res.Queries, current)
+			current = nil
+
+		case strings.HasPrefix(line, beginToken):
+			// eat comments
+		default:
+
+			if current != nil {
+				current.Query = current.Query + line
+			}
+		}
+	}
+
+	for _, q := range res.Queries {
+		err := q.process()
+		if err != nil {
+			return nil, err
 		}
 
 	}
 
-	for _, t := range res.Queries {
-		t.process()
-	}
-
-	return res, nil
+	return &res, nil
 }
 
-func (p *Package) Render(w io.Writer) error {
+func (p *QueryBundle) Render(w io.Writer) error {
+
+	err := p.renderHelper(w)
+	if err != nil {
+		return nil
+	}
 
 	tmpl, err := template.New("test").Parse(gocode)
 	if err != nil {
@@ -157,40 +225,45 @@ func (p *Package) Render(w io.Writer) error {
 	return nil
 }
 
-const gocode = `
-package {{.Name}}
+func (p *QueryBundle) renderHelper(w io.Writer) error {
+	tmpl, err := template.New("helper").Parse(helper)
+	if err != nil {
+		return err
+	}
+	err = tmpl.Execute(w, p)
 
-import (
-	"database/sql"
-)
+	if err != nil {
+		return err
+	}
 
-type Querer interface {
-	Query(query string, args ...interface{}) (*sql.Rows, error)
+	return nil
+
 }
 
+const gocode = `
+
 {{range .Queries}}
-type {{.Name}}In struct {
+type {{.Name}}Query struct {
 {{range .Ins}}
 	{{.GoName}} {{.GoType}}{{end}}
 }
 
-type {{.Name}}Out struct {
+type {{.Name}}Row struct {
 {{range .Outs}}
 	{{.GoName}} {{.GoType}}{{end}}
 }
 
+func (s *sqlTplQ) {{.Name}}(in {{.Name}}Query) ([]{{.Name}}Row, error) {
 
-func {{.Name}}(q Querer, in {{.Name}}In) ([]{{.Name}}Out, error) {
+	var res []{{.Name}}Row
 
-	var res []{{.Name}}Out
-
-	rows, err := q.Query("{{.Query}}", {{range $i, $v := .Ins}}{{if $i}}, {{end}}in.{{$v.GoName}}{{end}})
+	rows, err := s.q.Query("{{.Query}}", {{range $i, $v := .Ins}}{{if $i}}, {{end}}in.{{$v.GoName}}{{end}})
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var out {{.Name}}Out
+		var out {{.Name}}Row
 
 		if err := rows.Scan({{range $i, $v := .Outs}}{{if $i}}, {{end}}out.{{$v.GoName}}{{end}}); err != nil {
 			return nil, err
@@ -204,6 +277,37 @@ func {{.Name}}(q Querer, in {{.Name}}In) ([]{{.Name}}Out, error) {
 }
 
 {{end}}
+`
+
+const helper = `
+package {{.Name}}
+
+// generate by go-sqltpl do not edit 
+
+import (
+	"database/sql"
+)
+
+type sqlTplQuerer interface {
+
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+}
+
+type sqlTplQ struct {
+	q sqlTplQuerer
+}
+
+func WithDB(db *sql.DB) *sqlTplQ {
+	return &sqlTplQ{
+		q: db,
+	}
+}
+
+func WithTX(tx *sql.Tx) *sqlTplQ {
+	return &sqlTplQ{
+		q: tx,
+	}
+}
 
 
 `
