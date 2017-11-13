@@ -3,10 +3,10 @@ package sqltpl
 import (
 	"bufio"
 	"fmt"
-	"html/template"
 	"io"
 	"regexp"
 	"strings"
+	"text/template"
 )
 
 const (
@@ -189,7 +189,7 @@ func (p *Parser) Parse(r io.Reader) (*QueryBundle, error) {
 		default:
 
 			if current != nil {
-				current.Query = current.Query + line
+				current.Query = current.Query + " " + line
 			}
 		}
 	}
@@ -205,6 +205,21 @@ func (p *Parser) Parse(r io.Reader) (*QueryBundle, error) {
 	return &res, nil
 }
 
+func (q *Query) render(tpl string, w io.Writer) error {
+
+	tmpl, err := template.New("test").Parse(tpl)
+	if err != nil {
+		return err
+	}
+	err = tmpl.Execute(w, q)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (p *QueryBundle) Render(w io.Writer) error {
 
 	err := p.renderHelper(w)
@@ -212,17 +227,25 @@ func (p *QueryBundle) Render(w io.Writer) error {
 		return nil
 	}
 
-	tmpl, err := template.New("test").Parse(gocode)
-	if err != nil {
-		return err
-	}
-	err = tmpl.Execute(w, p)
+	for _, q := range p.Queries {
 
-	if err != nil {
-		return err
+		tpl := q.findTemplate()
+
+		err := q.render(tpl, w)
+
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func (q *Query) findTemplate() string {
+	if len(q.Outs) == 0 {
+		return executeTemplate
+	}
+	return selectTemplate
 }
 
 func (p *QueryBundle) renderHelper(w io.Writer) error {
@@ -240,9 +263,21 @@ func (p *QueryBundle) renderHelper(w io.Writer) error {
 
 }
 
-const gocode = `
+const executeTemplate = `
 
-{{range .Queries}}
+func (s *sqlTplQ) {{.Name}}({{range $i, $v := .Ins}}{{if $i}}, {{end}}{{$v.GoName}} {{$v.GoType}}{{end}}) ( error) {
+	
+	_, err := s.q.Exec("{{.Query}}", {{range $i, $v := .Ins}}{{if $i}}, {{end}}{{$v.GoName}} {{end}})
+	if err != nil {
+		return err
+	}
+	return nil	
+}	
+
+`
+
+const selectTemplate = `
+
 type {{.Name}}Query struct {
 {{range .Ins}}
 	{{.GoName}} {{.GoType}}{{end}}
@@ -265,7 +300,7 @@ func (s *sqlTplQ) {{.Name}}(in {{.Name}}Query) ([]{{.Name}}Row, error) {
 	for rows.Next() {
 		var out {{.Name}}Row
 
-		if err := rows.Scan({{range $i, $v := .Outs}}{{if $i}}, {{end}}out.{{$v.GoName}}{{end}}); err != nil {
+		if err := rows.Scan({{range $i, $v := .Outs}}{{if $i}}, {{end}}&out.{{$v.GoName}}{{end}}); err != nil {
 			return nil, err
 		}
 		res = append(res, out)
@@ -276,7 +311,6 @@ func (s *sqlTplQ) {{.Name}}(in {{.Name}}Query) ([]{{.Name}}Row, error) {
 	return res, nil
 }
 
-{{end}}
 `
 
 const helper = `
@@ -289,7 +323,7 @@ import (
 )
 
 type sqlTplQuerer interface {
-
+	Exec(query string, args ...interface{}) (sql.Result, error)
 	Query(query string, args ...interface{}) (*sql.Rows, error)
 }
 

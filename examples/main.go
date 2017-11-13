@@ -11,32 +11,55 @@ import (
 )
 
 const (
-	DB_USER     = "test"
-	DB_PASSWORD = "test"
-	DB_NAME     = "test"
+	dbUser = "test"
+	dbPass = "test"
+	dbName = "test"
 )
+
+func checkErr(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
 
 func main() {
 	dbinfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable",
-		DB_USER, DB_PASSWORD, DB_NAME)
+		dbUser, dbPass, dbName)
 	db, err := sql.Open("postgres", dbinfo)
 
-	if err != nil {
-		log.Fatal(err)
-	}
+	checkErr(err)
 
 	log.Println("Start")
 
 	q := WithDB(db)
 
-	outs, _ := q.UserIdNameByEmail(UserIdNameByEmailQuery{Email: "foo@bar"})
-	log.Println("outs", outs)
+	// -- sqltpl: DropDb
+	// drop table foo;
+	// -- end
+	q.DropDb()
 
-	// -- sqltpl: Ids
-	// select id@@int from user
+	// -- sqltpl: InitDb
+	// create table foo (bar int);
+	// -- end
+	err = q.InitDb()
+	checkErr(err)
+
+	// -- sqltpl: AddFoo
+	// insert into foo values(?n@@int)
 	// -- end
 
-	outs2, _ := q.Ids(IdsQuery{})
-	log.Println("outs2", outs2)
+	x := []int{1, 2, 3, 4, 5, 6}
+
+	for _, v := range x {
+		checkErr(q.AddFoo(v))
+	}
+
+	// -- sqltpl: Content
+	// select bar@@int from foo
+	// -- end
+
+	rows, err := q.Content(ContentQuery{})
+	checkErr(err)
+	log.Println("rows", rows)
 
 }
