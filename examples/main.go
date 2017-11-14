@@ -58,7 +58,7 @@ func main() {
 	// select bar@@int from foo
 	// -- end
 
-	rows, err := q.Content(ContentQuery{})
+	rows, err := q.Content()
 	checkErr(err)
 	log.Println("rows", rows)
 
@@ -79,13 +79,13 @@ func txExample(db *sql.DB) error {
 
 	q.AddFoo(100)
 
-	rows, err := q.GetByID(GetByIDQuery{Id: 100})
+	rows, err := q.GetByID(100)
 	log.Println("should be 1: ", len(rows))
 
 	err = tx.Rollback()
 	checkErr(err)
 
-	rows, err = WithDB(db).GetByID(GetByIDQuery{Id: 100})
+	rows, err = WithDB(db).GetByID(100)
 	log.Println("should be 0: ", len(rows))
 	return nil
 }
