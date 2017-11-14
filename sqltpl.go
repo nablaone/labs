@@ -9,20 +9,14 @@ import (
 	"text/template"
 )
 
-const (
-	InsertQuery = iota
-	SelectQuery
-	ScalarSelectQuery
-	UpdateQuery
-	DeleteQuery
-)
-
+// Param holds query parameter info.
 type Param struct {
 	Name   string
 	GoType string
 	GoName string
 }
 
+// Query represents SQL query.
 type Query struct {
 	Name  string
 	Ins   []Param
@@ -30,6 +24,7 @@ type Query struct {
 	Query string
 }
 
+// QueryBundle contains all currently processed queries.
 type QueryBundle struct {
 	Name    string
 	Queries []*Query
@@ -100,21 +95,21 @@ func parseQuery(query string) (Query, error) {
 	return t, err
 }
 
-func (t *Query) process() error {
+func (q *Query) process() error {
 
-	q, ins, err := processInParams(t.Query)
+	query, ins, err := processInParams(q.Query)
 	if err != nil {
 		return err
 	}
 
-	q, outs, err := processOutParams(q)
+	query, outs, err := processOutParams(query)
 	if err != nil {
 		return err
 	}
 
-	t.Ins = ins
-	t.Outs = outs
-	t.Query = q
+	q.Ins = ins
+	q.Outs = outs
+	q.Query = query
 
 	return nil
 }
@@ -125,12 +120,14 @@ const (
 	startComment = "--"
 )
 
+// Parser contains current parsing context.
 type Parser struct {
 	TransformLine func(string) string
 	Context       string
 }
 
-func NewSqlParser() *Parser {
+// NewSQLParser creates new parser for  *.sqlt files.
+func NewSQLParser() *Parser {
 	return &Parser{
 		TransformLine: func(s string) string {
 			return s
@@ -138,6 +135,7 @@ func NewSqlParser() *Parser {
 	}
 }
 
+// NewGoParser create new parser for *.go type files.
 func NewGoParser() *Parser {
 	var comment = "//"
 
@@ -158,6 +156,7 @@ func NewGoParser() *Parser {
 	}
 }
 
+// Parse parses queries found in reader.
 func (p *Parser) Parse(r io.Reader) (*QueryBundle, error) {
 	var res QueryBundle
 	scanner := bufio.NewScanner(r)
@@ -220,6 +219,7 @@ func (q *Query) render(tpl string, w io.Writer) error {
 	return nil
 }
 
+// Render renders Go code.
 func (p *QueryBundle) Render(w io.Writer) error {
 
 	err := p.renderHelper(w)
@@ -265,7 +265,7 @@ func (p *QueryBundle) renderHelper(w io.Writer) error {
 
 const executeTemplate = `
 
-func (s *sqlTplQ) {{.Name}}({{range $i, $v := .Ins}}{{if $i}}, {{end}}{{$v.GoName}} {{$v.GoType}}{{end}}) ( error) {
+func (s *SqlTplQ) {{.Name}}({{range $i, $v := .Ins}}{{if $i}}, {{end}}{{$v.GoName}} {{$v.GoType}}{{end}}) ( error) {
 	
 	_, err := s.q.Exec("{{.Query}}", {{range $i, $v := .Ins}}{{if $i}}, {{end}}{{$v.GoName}} {{end}})
 	if err != nil {
@@ -288,7 +288,7 @@ type {{.Name}}Row struct {
 	{{.GoName}} {{.GoType}}{{end}}
 }
 
-func (s *sqlTplQ) {{.Name}}(in {{.Name}}Query) ([]{{.Name}}Row, error) {
+func (s *SqlTplQ) {{.Name}}(in {{.Name}}Query) ([]{{.Name}}Row, error) {
 
 	var res []{{.Name}}Row
 
@@ -322,23 +322,27 @@ import (
 	"database/sql"
 )
 
-type sqlTplQuerer interface {
+// Mothods supported by transaction and bare connection
+type SqlTplQuerer interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 	Query(query string, args ...interface{}) (*sql.Rows, error)
 }
 
-type sqlTplQ struct {
-	q sqlTplQuerer
+// Wraps underlying querer
+type SqlTplQ struct {
+	q SqlTplQuerer
 }
 
-func WithDB(db *sql.DB) *sqlTplQ {
-	return &sqlTplQ{
+// Runs queries against database connection
+func WithDB(db *sql.DB) *SqlTplQ {
+	return &SqlTplQ{
 		q: db,
 	}
 }
 
-func WithTX(tx *sql.Tx) *sqlTplQ {
-	return &sqlTplQ{
+// Runs queries against database transaction
+func WithTX(tx *sql.Tx) *SqlTplQ {
+	return &SqlTplQ{
 		q: tx,
 	}
 }

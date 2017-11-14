@@ -35,7 +35,7 @@ func parse(file string) (*sqltpl.QueryBundle, error) {
 		parser = sqltpl.NewGoParser()
 
 	case strings.HasSuffix(file, ".sql") || strings.HasSuffix(file, ".sqlt"):
-		parser = sqltpl.NewSqlParser()
+		parser = sqltpl.NewSQLParser()
 
 	default:
 		return nil, errors.New("file type not supported")
