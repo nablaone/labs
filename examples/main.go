@@ -36,7 +36,7 @@ func main() {
 	// -- sqltpl: DropDb
 	// drop table foo;
 	// -- end
-	q.DropDb()
+	_ = q.DropDb()
 
 	// -- sqltpl: InitDb
 	// create table foo (bar int);
@@ -62,4 +62,30 @@ func main() {
 	checkErr(err)
 	log.Println("rows", rows)
 
+	txExample(db)
+}
+
+func txExample(db *sql.DB) error {
+	// -- sqltpl: GetByID
+	// select bar@@int from foo where bar = ?id@@int
+	// -- end
+
+	log.Println("with tx")
+
+	tx, err := db.Begin()
+	checkErr(err)
+
+	q := WithTX(tx)
+
+	q.AddFoo(100)
+
+	rows, err := q.GetByID(GetByIDQuery{Id: 100})
+	log.Println("should be 1: ", len(rows))
+
+	err = tx.Rollback()
+	checkErr(err)
+
+	rows, err = WithDB(db).GetByID(GetByIDQuery{Id: 100})
+	log.Println("should be 0: ", len(rows))
+	return nil
 }
