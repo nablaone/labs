@@ -31,7 +31,7 @@ type QueryBundle struct {
 }
 
 func processInParams(query string) (string, []Param, error) {
-	rx := regexp.MustCompile("\\?[_a-zA-Z]+@@[a-z]+")
+	rx := regexp.MustCompile("\\?[_a-zA-Z0-9]+@@[a-zA-Z0-9\\.]+")
 
 	var ins []Param
 	var count = 0
@@ -58,7 +58,7 @@ func processInParams(query string) (string, []Param, error) {
 }
 
 func processOutParams(query string) (string, []Param, error) {
-	rx := regexp.MustCompile("[_a-zA-Z]+@@[a-z]+")
+	rx := regexp.MustCompile("[_a-zA-Z0-9]+@@[a-zA-Z0-9\\.]+")
 
 	var ins []Param
 

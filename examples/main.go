@@ -39,7 +39,7 @@ func main() {
 	_ = q.DropDb()
 
 	// -- sqltpl: InitDb
-	// create table foo (bar int);
+	// create table foo (bar int null);
 	// -- end
 	err = q.InitDb()
 	checkErr(err)
@@ -63,6 +63,8 @@ func main() {
 	log.Println("rows", rows)
 
 	txExample(db)
+
+	nullableExample(db)
 }
 
 func txExample(db *sql.DB) error {
@@ -87,5 +89,51 @@ func txExample(db *sql.DB) error {
 
 	rows, err = WithDB(db).GetByID(100)
 	log.Println("should be 0: ", len(rows))
+	return nil
+}
+
+func intN(i *int) sql.NullInt64 {
+	if i == nil {
+		return sql.NullInt64{
+			Int64: 0,
+			Valid: false}
+	}
+
+	return sql.NullInt64{
+		Int64: int64(*i),
+		Valid: true}
+}
+
+func nullableExample(db *sql.DB) error {
+
+	tx, err := db.Begin()
+	checkErr(err)
+
+	q := WithTX(tx)
+
+	// -- sqltpl: AddFooN
+	//  insert into foo(bar) values(?bar@@sql.NullInt64)
+	// -- end
+
+	var i *int
+
+	q.AddFooN(intN(i))
+
+	j := -1
+
+	q.AddFooN(intN(&j))
+
+	// -- sqltpl: ContentNullable
+	// select bar@@sql.NullInt64 from foo
+	// -- end
+
+	rows, err := q.ContentNullable()
+	checkErr(err)
+
+	fmt.Println(rows)
+
+	err = tx.Rollback()
+	checkErr(err)
+
 	return nil
 }
