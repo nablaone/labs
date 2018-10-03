@@ -17,7 +17,7 @@ func main() {
 	packageName := os.Args[2]
 	out := os.Args[3]
 
-	processor := &vertabelo2gorm.Processor{}
+	processor := vertabelo2gorm.NewProcessor()
 	processor.Package = packageName
 
 	must := func(err error) {
