@@ -1,36 +1,36 @@
-package example
+package main
 
 type Purchase struct {
-	ID	string
+	ID	int
 	PurchaseNo	string
-	ClientID	string
+	ClientID	int
 }
 
 type Product struct {
-	ID	string
-	ProductCategoryID	string
+	ID	int
+	ProductCategoryID	int
 	Sku	string
 	Name	string
 	Price	string
 	Description	string
-	Image	string
+	Image	[]byte
 }
 
 type PurchaseItem struct {
-	ID	string
-	PurchaseID	string
-	ProductID	string
-	Amount	string
+	ID	int
+	PurchaseID	int
+	ProductID	int
+	Amount	int
 }
 
 type ProductCategory struct {
-	ID	string
+	ID	int
 	Name	string
-	ParentCategoryID	string
+	ParentCategoryID	*int
 }
 
 type Client struct {
-	ID	string
+	ID	int
 	FullName	string
 	Email	string
 }
