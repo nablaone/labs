@@ -1,7 +1,11 @@
 package vertabelo2gorm
 
 import (
+	"bytes"
 	"fmt"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 )
 
@@ -26,28 +30,41 @@ type GormDatabase struct {
 
 func (g *GormDatabase) Emit(w io.Writer) error {
 
-	fmt.Fprintf(w, "package %s\n\n", g.Package)
+	var buff bytes.Buffer
+
+	fmt.Fprintf(&buff, "package %s\n\n", g.Package)
 
 	for _, i := range g.Imports {
-		fmt.Fprintf(w, "import \"%s\"\n", i)
+		fmt.Fprintf(&buff, "import \"%s\"\n", i)
 	}
 
 	for _, m := range g.Models {
 
-		fmt.Fprintf(w, "type %s struct {\n", m.Name)
+		fmt.Fprintf(&buff, "type %s struct {\n", m.Name)
 
 		for _, f := range m.Fields {
 
 			if f.Annotation == "" {
-				fmt.Fprintf(w, "\t%s\t%s\n", f.Name, f.Type)
+				fmt.Fprintf(&buff, "\t%s\t%s\n", f.Name, f.Type)
 			} else {
-				fmt.Fprintf(w, "\t%s\t%s\t`%s`\n", f.Name, f.Type, f.Annotation)
+				fmt.Fprintf(&buff, "\t%s\t%s\t`%s`\n", f.Name, f.Type, f.Annotation)
 			}
 
 		}
 
-		fmt.Fprintf(w, "}\n\n")
+		fmt.Fprintf(&buff, "}\n\n")
+	}
 
+	src := buff.String()
+	fset := token.NewFileSet() // positions are relative to fset
+	f, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		return fmt.Errorf("generated code parsing failed: %s", err)
+	}
+
+	err = format.Node(w, fset, f)
+	if err != nil {
+		return fmt.Errorf("generated code formating failed: %s", err)
 	}
 
 	return nil
