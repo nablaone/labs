@@ -1,6 +1,7 @@
 package vertabelo2gorm_test
 
 import (
+	"io/ioutil"
 	"os"
 	"testing"
 
@@ -18,6 +19,6 @@ func TestEmit1(t *testing.T) {
 	var p vertabelo2gorm.Processor
 	p.Package = "test"
 
-	p.Process(in, os.Stdout)
+	p.Process(in, ioutil.Discard)
 
 }
