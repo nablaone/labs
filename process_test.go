@@ -20,5 +20,6 @@ func TestEmit1(t *testing.T) {
 	p.Package = "test"
 
 	p.Process(in, ioutil.Discard)
+	//p.Process(in, os.Stdout)
 
 }

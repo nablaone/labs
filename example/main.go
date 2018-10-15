@@ -31,11 +31,19 @@ func clientPurchase(db *gorm.DB, client *Client) {
 
 	var purchases []Purchase
 
-	must(db.Where("client_id = ?", client.ID).Find(&purchases).GetErrors()...)
+	must(db.Model(client).Related(&purchases).GetErrors()...)
 
 	for _, p := range purchases {
 		fmt.Println("  ", p.PurchaseNo)
+
+		var items []PurchaseItem
+		must(db.Model(&p).Preload("Product").Related(&items).GetErrors()...)
+
+		for _, i := range items {
+			fmt.Println("   - ", i.Product.Sku, i.Amount)
+		}
 	}
+
 }
 
 func main() {

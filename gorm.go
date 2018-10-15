@@ -18,14 +18,14 @@ type Field struct {
 type Model struct {
 	Name    string
 	SQLName string
-	Fields  []Field
+	Fields  []*Field
 }
 
 // FIXME add other nodess 	Annotation string
 type GormDatabase struct {
 	Package string
 	Imports []string
-	Models  []Model
+	Models  []*Model
 }
 
 func (g *GormDatabase) Emit(w io.Writer) error {

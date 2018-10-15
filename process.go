@@ -89,18 +89,58 @@ func (p *Processor) Process(in io.Reader, out io.Writer) error {
 	model := &GormDatabase{}
 	model.Package = p.Package
 
+	id2model := make(map[string]*Model)
+	id2field := make(map[string]*Field)
+
 	for _, t := range database.Tables {
-		var m Model
+
+		m := &Model{}
+
 		m.Name = p.convertTableName(t.Name)
 		m.SQLName = t.Name
 
 		for _, c := range t.Columns {
-			var f Field
+			f := &Field{}
 			f.Name = p.convertColumnName(c.Name)
 			f.Type = p.convertType(c)
 			m.Fields = append(m.Fields, f)
+
+			id2field[c.ID] = f
 		}
 		model.Models = append(model.Models, m)
+
+		id2model[t.ID] = m
+	}
+
+	for _, r := range database.References {
+		primaryModel := id2model[r.PKTable]
+
+		if primaryModel == nil {
+			panic("No such model: " + r.PKTable)
+		}
+
+		foreignModel := id2model[r.FKTable]
+
+		if len(r.ReferenceColumns) > 2 {
+			panic("Multi column referecenes are not supported. Reference id: " + r.Name)
+		}
+
+		foreignField := id2field[r.ReferenceColumns[0].FKColumn]
+
+		pkField := &Field{}
+		pkField.Name = foreignModel.Name + "s"
+		pkField.Type = "*" + foreignModel.Name
+		pkField.Annotation = "gorm:foreignkey:" + foreignField.Name
+
+		primaryModel.Fields = append(primaryModel.Fields, pkField)
+
+		fkField := &Field{}
+		fkField.Name = primaryModel.Name
+		fkField.Type = "*" + primaryModel.Name
+		fkField.Annotation = "gorm:foreignkey:" + foreignField.Name
+
+		foreignModel.Fields = append(foreignModel.Fields, fkField)
+
 	}
 
 	err = model.Emit(out)

@@ -4,6 +4,7 @@ import "encoding/xml"
 
 type Column struct {
 	// FIXME add other nodes
+	ID          string `xml:"Id,attr"`
 	Name        string `xml:"Name"`
 	Type        string `xml:"Type"`
 	Description string `xml:"Description"`
@@ -16,7 +17,7 @@ type PrimaryKey struct {
 }
 
 type Table struct {
-	// FIXME add other nodes
+	ID         string     `xml:"Id,attr"`
 	Name       string     `xml:"Name"`
 	Columns    []Column   `xml:"Columns>Column"`
 	PrimaryKey PrimaryKey `xml:"PrimaryKey"`
