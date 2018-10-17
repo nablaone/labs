@@ -129,7 +129,7 @@ func (p *Processor) Process(in io.Reader, out io.Writer) error {
 
 		pkField := &Field{}
 		pkField.Name = foreignModel.Name + "s"
-		pkField.Type = "*" + foreignModel.Name
+		pkField.Type = "[]" + foreignModel.Name
 		pkField.Annotation = "gorm:foreignkey:" + foreignField.Name
 
 		primaryModel.Fields = append(primaryModel.Fields, pkField)

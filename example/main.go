@@ -18,7 +18,7 @@ func must(errs ...error) {
 
 func allClients(db *gorm.DB) {
 	var clients []Client
-	must(db.Find(&clients).GetErrors()...)
+	must(db.Preload("Purchases").Find(&clients).GetErrors()...)
 
 	for _, c := range clients {
 		fmt.Println("* ", c.ID, c.FullName, c.Email)
@@ -29,11 +29,7 @@ func allClients(db *gorm.DB) {
 
 func clientPurchase(db *gorm.DB, client *Client) {
 
-	var purchases []Purchase
-
-	must(db.Model(client).Related(&purchases).GetErrors()...)
-
-	for _, p := range purchases {
+	for _, p := range client.Purchases {
 		fmt.Println("  ", p.PurchaseNo)
 
 		var items []PurchaseItem

@@ -4,8 +4,8 @@ type Purchase struct {
 	ID            int
 	PurchaseNo    string
 	ClientID      int
-	PurchaseItems *PurchaseItem `gorm:foreignkey:PurchaseID`
-	Client        *Client       `gorm:foreignkey:ClientID`
+	PurchaseItems []PurchaseItem `gorm:foreignkey:PurchaseID`
+	Client        *Client        `gorm:foreignkey:ClientID`
 }
 
 type Product struct {
@@ -16,7 +16,7 @@ type Product struct {
 	Price             string
 	Description       string
 	Image             []byte
-	PurchaseItems     *PurchaseItem    `gorm:foreignkey:ProductID`
+	PurchaseItems     []PurchaseItem   `gorm:foreignkey:ProductID`
 	ProductCategory   *ProductCategory `gorm:foreignkey:ProductCategoryID`
 }
 
@@ -33,14 +33,14 @@ type ProductCategory struct {
 	ID               int
 	Name             string
 	ParentCategoryID *int
-	ProductCategorys *ProductCategory `gorm:foreignkey:ParentCategoryID`
-	ProductCategory  *ProductCategory `gorm:foreignkey:ParentCategoryID`
-	Products         *Product         `gorm:foreignkey:ProductCategoryID`
+	ProductCategorys []ProductCategory `gorm:foreignkey:ParentCategoryID`
+	ProductCategory  *ProductCategory  `gorm:foreignkey:ParentCategoryID`
+	Products         []Product         `gorm:foreignkey:ProductCategoryID`
 }
 
 type Client struct {
 	ID        int
 	FullName  string
 	Email     string
-	Purchases *Purchase `gorm:foreignkey:ClientID`
+	Purchases []Purchase `gorm:foreignkey:ClientID`
 }
