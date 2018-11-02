@@ -10,7 +10,8 @@ import (
 func main() {
 
 	if len(os.Args) != 4 {
-		fmt.Println("Usage: vertabelo2gorm input.xml package_name output.xml")
+		fmt.Println("Usage: vertabelo2gorm input.xml package_name output.go")
+		return
 	}
 
 	in := os.Args[1]
