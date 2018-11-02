@@ -20,6 +20,7 @@ func main() {
 
 	processor := vertabelo2gorm.NewProcessor()
 	processor.Package = packageName
+	processor.TypeMapper = &vertabelo2gorm.PostgreSQLTypeMapper{}
 
 	must := func(err error) {
 		if err != nil {

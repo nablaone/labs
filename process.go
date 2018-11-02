@@ -7,22 +7,19 @@ import (
 	"strings"
 )
 
+type TypeMapper interface {
+	GoType(sqlType string, nullable bool) (out string)
+}
+
 type Processor struct {
-	Package     string
-	TypeMapping map[string]string
+	Package    string
+	TypeMapper TypeMapper
 }
 
 func NewProcessor() *Processor {
 	p := &Processor{}
 	p.Package = "main"
 
-	p.TypeMapping = make(map[string]string)
-	// FIXME only types that exists in test.xml
-	p.TypeMapping["int"] = "int"
-	p.TypeMapping["varchar(255)"] = "string"
-	p.TypeMapping["varchar(1000)"] = "string"
-	p.TypeMapping["char(12)"] = "string"
-	p.TypeMapping["bytea"] = "[]byte"
 	return p
 }
 
@@ -54,23 +51,15 @@ func (p *Processor) convertColumnName(t string) string {
 
 func (p *Processor) convertType(c Column) string {
 
-	res := ""
-
-	if c.Nullable == "true" {
-		res = "*"
+	if p.TypeMapper == nil {
+		if c.Nullable == "true" {
+			return "*string"
+		} else {
+			return "string"
+		}
 	}
 
-	sql := strings.ToLower(c.Type)
-
-	gotype, ok := p.TypeMapping[sql]
-
-	if ok {
-		res = res + gotype
-	} else {
-		res = res + "string"
-	}
-
-	return res
+	return p.TypeMapper.GoType(c.Type, c.Nullable == "true")
 
 }
 

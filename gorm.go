@@ -38,6 +38,10 @@ func (g *GormDatabase) Emit(w io.Writer) error {
 		fmt.Fprintf(&buff, "import \"%s\"\n", i)
 	}
 
+	fmt.Fprintf(&buff, "import \"%s\"\n", "math/big")
+
+	fmt.Fprintf(&buff, "var _  big.Rat \n")
+
 	for _, m := range g.Models {
 
 		fmt.Fprintf(&buff, "type %s struct {\n", m.Name)

@@ -1,5 +1,9 @@
 package main
 
+import "math/big"
+
+var _ big.Rat
+
 type Purchase struct {
 	ID            int
 	PurchaseNo    string
