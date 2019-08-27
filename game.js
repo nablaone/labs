@@ -33,7 +33,190 @@ function initKonva() {
     return layer;
 };
 
+function VelocitySystem(ecs) {
 
+    var entities = ecs.filter("velocity");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+
+        if (!ecs.hasComponent(e,"position")) {
+            continue;
+        }
+
+        var pos = ecs.getComponent(e, "position");
+        var velocity = ecs.getComponent(e, "velocity");
+
+
+        pos.x = pos.x + velocity.x;
+        pos.y = pos.y + velocity.y;
+
+    }
+
+};
+
+function GravitySystem(ecs) {
+
+    var entities = ecs.filter("gravity");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+
+        if (!ecs.hasComponent(e,"velocity")) {
+            continue;
+        }
+
+
+
+        var velocity = ecs.getComponent(e, "velocity");
+
+        velocity.y = velocity.y - 0.1;
+        
+  }
+
+};
+
+
+function DumpPositionSystem(ecs) {
+
+    var entities = ecs.filter("position");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+        var pos = ecs.getComponent(e, "position");
+        
+        console.log("POSITION: ", e, pos.x, pos.y);
+    }
+
+};
+
+
+
+
+
+function BoundarySystem(esc) {
+
+    var entities = ecs.filter("bouncingRoof");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+        var pos = ecs.getComponent(e, "position");
+        var velocity = ecs.getComponent(e, "velocity");
+        
+        if (pos.y > HEIGHT) {
+            pos.y = HEIGHT;
+            velocity.y = - velocity.y;
+        }
+    }
+    
+
+    var entities = ecs.filter("bouncingFloor");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+        var pos = ecs.getComponent(e, "position");
+        var velocity = ecs.getComponent(e, "velocity");
+        
+        if (pos.y < 0) {
+            pos.y = 0;
+            velocity.y = - velocity.y;
+        }
+    }
+
+
+    var entities = ecs.filter("dampingFloor");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+        var pos = ecs.getComponent(e, "position");
+        var velocity = ecs.getComponent(e, "velocity");
+        
+        if (pos.y < 0) {
+            pos.y = 0;
+            velocity.y = 0;
+        }
+    }
+
+    var entities = ecs.filter("boundaryBounce");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+        var pos = ecs.getComponent(e, "position");
+        var velocity = ecs.getComponent(e, "velocity");
+        
+        if (pos.x < 0) {
+            pos.x = 0;
+            velocity.x = - velocity.x;
+        }
+
+        if (pos.x > WIDTH) {
+            pos.x = WIDTH;
+            velocity.x = - velocity.x;
+        }
+
+        if (pos.y < 0) {
+            pos.y = 0;
+            velocity.y = - velocity.y;
+        }
+
+        if (pos.y > HEIGHT) {
+            pos.y = HEIGHT;
+            velocity.y = - velocity.y;
+        }
+
+    }
+}
+
+function KonvaPositionUpdateSystem(ecs) {
+
+    var entities = ecs.filter("drawable");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+
+        if (!ecs.hasComponent(e,"position")) {
+            continue;
+        }
+
+        var drawable = ecs.getComponent(e, "drawable");
+        var position = ecs.getComponent(e, "position");
+    
+        drawable.element.setX(position.x);
+        drawable.element.setY(HEIGHT - position.y - drawable.element.getHeight());
+    }
+};
+
+
+
+
+function CleanUpSpritesSystem(ecs) {
+
+    var entities = ecs.filter("drawable");
+
+    for (let i = 0; i < entities.length; i++ ) {
+
+        var e = entities[i];     
+
+        if (!ecs.hasComponent(e,"position")) {
+            continue;
+        }
+
+        var drawable = ecs.getComponent(e, "drawable");
+        var position = ecs.getComponent(e, "position");
+
+        if (position.x < 0) {
+            ecs.removeEntity(e);
+        }
+    }
+}
 
 
 function initECS(layer) {
@@ -73,46 +256,27 @@ function initECS(layer) {
             },
         };
 
-    var empty = {
-        add: function(){return {}},
-        remove: function(){}
+    var empty = function() {
+        return {
+            add: function(){return {}},
+            remove: function(){}
+        }
     };    
 
 
-    ecs.components.boundaryBounce = {
-        add: function(){return {}},
-        remove: function(){}
-    };    
 
-    ecs.components.gravity = {
-        add: function(){return {}},
-        remove: function(){}
-    };   
-
-    ecs.components.dampingFloor = {
-        add: function(){return {}},
-        remove: function(){}
-    }; 
-
-    ecs.components.bouncingRoof = {
-        add: function(){return {}},
-        remove: function(){}
-    }; 
-
-
-    ecs.components.bouncingFloor = {
-        add: function(){return {}},
-        remove: function(){}
-    }; 
-
-    ecs.components.player = {
-        add: function(){return {}},
-        remove: function(){}
-    }; 
-
+    ecs.components.boundaryBounce = empty();
+    ecs.components.gravity = empty();
+    ecs.components.dampingFloor = empty();
+    ecs.components.bouncingRoof = empty();
+    ecs.components.bouncingFloor = empty();
+    ecs.components.player = empty();
 
     ecs.components.collidable = {
-        add: function(){return {}},
+        add: function(){return {
+            kill: false,
+            points: 0,
+        }},
         remove: function(){}
     }; 
 
@@ -127,42 +291,18 @@ function initECS(layer) {
         },
     }
     
-    var KonvaPositionUpdateSystem = function(ecs) {
-
-        var entities = ecs.filter("drawable");
-
-        for (let i = 0; i < entities.length; i++ ) {
-
-            var e = entities[i];     
-
-            if (!ecs.hasComponent(e,"position")) {
-                continue;
-            }
-
-            var drawable = ecs.getComponent(e, "drawable");
-            var position = ecs.getComponent(e, "position");
-        
-            drawable.element.setX(position.x);
-            drawable.element.setY(HEIGHT - position.y - drawable.element.getHeight());
-        }
-    };
-
-    var KonvaRedraw = function() {
-        layer.draw();
-    }
-
-    var MapGenerator = function(ecs) {
+    function MapGenerator(ecs) {
 
         if(ecs.frame % 200 != 0) {
             return;
         }
 
         e1 = ecs.newEntity("e" + ecs.frame);
-    
+
         ecs.addComponent(e1, "collidable");
         ecs.addComponent(e1, "bouncingFloor");
         ecs.addComponent(e1, "bouncingRoof");
-        
+
         var pos = ecs.addComponent(e1,"position");
         pos.x = WIDTH;
         pos.y = HEIGHT * Math.random();
@@ -174,7 +314,7 @@ function initECS(layer) {
 
         var drawable = ecs.addComponent(e1,"drawable");
 
-      // create our shape
+  //     create our shape
         var el = new Konva.Rect({
             x: 0,
             y: 0,
@@ -185,9 +325,9 @@ function initECS(layer) {
             strokeWidth: 4,
         });
         layer.add(el)
-        
+
         drawable.element = el;
-        
+
         // kupa czy lizak
         if (Math.random() < 0.5) {
             el.setFill("brown");
@@ -195,28 +335,11 @@ function initECS(layer) {
         } else {
             el.setFill("#ff0000");
         }
-    }
+    };
 
-    function CleanUpSpritesSystem(ecs) {
-
-        var entities = ecs.filter("drawable");
-
-        for (let i = 0; i < entities.length; i++ ) {
-
-            var e = entities[i];     
-
-            if (!ecs.hasComponent(e,"position")) {
-                continue;
-            }
-
-            var drawable = ecs.getComponent(e, "drawable");
-            var position = ecs.getComponent(e, "position");
-
-            if (position.x < 0) {
-                ecs.removeEntity(e);
-            }
-        }
-    }
+    var KonvaRedraw = function() {
+        layer.draw();
+    };
 
 
     ecs.registerEvent("jump");
