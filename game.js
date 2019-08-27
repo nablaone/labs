@@ -174,6 +174,64 @@ function BoundarySystem(esc) {
     }
 }
 
+function CollisionDetectorSystem(ecs) {
+
+    var players = ecs.filter("player");
+    var collidables = ecs.filter("collidable");
+
+    for (var i = 0; i < players.length; i++ ) {
+
+        var p = players[i];     
+
+        var ppos = ecs.getComponent(p,'position');
+        var pplayer = ecs.getComponent(p,'player');
+
+        if (ppos == null || pplayer == null) {
+            continue;
+        }
+
+        var pmaxx = ppos.x + pplayer.width;
+        var pmaxy = ppos.y + pplayer.height;
+        
+        var inside = function(x,y) {
+            var res =  x >= ppos.x && x <= pmaxx && y >= ppos.y && y <= pmaxy;
+
+            //console.log("INSIDE:", ppos.x, ppos.y, pmaxx, pmaxy, x,y);
+            return res;
+        }
+        
+        var collision = function(c) {
+   
+            var pos = ecs.getComponent(c,'position');
+            var col = ecs.getComponent(c,'collidable');
+
+            if (pos == null || col == null) {
+                return false;
+            }
+
+            var cmaxx = pos.x + col.width;
+            var cmaxy = pos.y + col.height;
+
+            return inside(pos.x, pos.y) || inside(pos.x, cmaxy) || inside(cmaxx, pos.y) || inside(cmaxx, cmaxy);
+
+        }
+
+
+        for(var j = 0; j < collidables.length; j++) {
+
+            var c = collidables[j];
+
+            if (collision(c)) {
+        
+                ecs.trigger("collision",c);
+            }
+        }
+
+    }
+
+}
+ 
+
 function KonvaPositionUpdateSystem(ecs) {
 
     var entities = ecs.filter("drawable");
@@ -212,7 +270,7 @@ function CleanUpSpritesSystem(ecs) {
         var drawable = ecs.getComponent(e, "drawable");
         var position = ecs.getComponent(e, "position");
 
-        if (position.x < 0) {
+        if (position.x < 0 || position.y < 0) {
             ecs.removeEntity(e);
         }
     }
@@ -276,6 +334,8 @@ function initECS(layer) {
         add: function(){return {
             kill: false,
             points: 0,
+            width: 0,
+            height: 0,
         }},
         remove: function(){}
     }; 
@@ -287,7 +347,7 @@ function initECS(layer) {
         },
 
         remove: function(instance) {
-            instance.remove();
+            instance.element.remove();
         },
     }
     
@@ -299,7 +359,9 @@ function initECS(layer) {
 
         e1 = ecs.newEntity("e" + ecs.frame);
 
-        ecs.addComponent(e1, "collidable");
+        var collidable = ecs.addComponent(e1, "collidable");
+        collidable.width = 30;
+        collidable.height = 30;
         ecs.addComponent(e1, "bouncingFloor");
         ecs.addComponent(e1, "bouncingRoof");
 
@@ -318,8 +380,8 @@ function initECS(layer) {
         var el = new Konva.Rect({
             x: 0,
             y: 0,
-            width: 30,
-            height: 30,
+            width: collidable.width,
+            height: collidable.height,
             fill: 'red',
             stroke: 'black',
             strokeWidth: 4,
@@ -331,9 +393,11 @@ function initECS(layer) {
         // kupa czy lizak
         if (Math.random() < 0.5) {
             el.setFill("brown");
+            collidable.points = -1;
             pos.y = 0;
         } else {
             el.setFill("#ff0000");
+            collidable.points = 1;
         }
     };
 
@@ -382,8 +446,43 @@ function initECS(layer) {
         }
         return;
     })
+
     // add touch listener
 
+    ecs.registerEvent("collision");
+    ecs.addEventListener("collision", function(entity) {
+
+        console.log("COLISION", entity);
+        var col = ecs.getComponent(entity, "collidable");
+
+        if (col.points > 0) {
+
+            console.log("POINTS");
+            var vel = ecs.getComponent(entity, "velocity");
+            vel.x = 1;
+            vel.y = 3;
+            ecs.addComponent(entity, "gravity");
+        
+            var drawable = ecs.getComponent(entity, "drawable");
+            drawable.element.rotate(45);
+            drawable.element.setFill("white");
+
+        } else {
+            console.log("SHIT");
+
+            var drawable = ecs.getComponent(entity, "drawable");
+
+            drawable.element.setHeight(10);
+            drawable.element.setWidth(50);
+
+        }
+
+        ecs.removeComponent(entity, "collidable");
+        ecs.removeComponent(entity, "bouncingFloor");
+        ecs.removeComponent(entity, "dampingFloor");
+    });
+
+    ecs.addSystem(CollisionDetectorSystem);
     ecs.addSystem(MapGenerator);
     ecs.addSystem(VelocitySystem);
     ecs.addSystem(GravitySystem);
@@ -413,24 +512,22 @@ function createPlayer(layer,ecs) {
     ecs.addComponent(player, "gravity");
     var drawable = ecs.addComponent(player, "drawable");
 
+    var pc = ecs.addComponent(player, "player");
+    pc.width = 100;
+    pc.height = 100;
+
     var el = new Konva.Rect({
         x: 0,
         y: 0,
-        width: 30,
-        height: 30,
-        fill: 'red',
+        width: pc.width,
+        height: pc.height,
         stroke: 'black',
-        strokeWidth: 4,
+        strokeWidth: 1,
     });
     layer.add(el);
 
-    el.setFill("#000000");
-    el.setWidth(100);
-    el.setHeight(100);
     drawable.element = el;
-    
-    ecs.addComponent(player, "player");
-
+   
 }
 
 function init() {
