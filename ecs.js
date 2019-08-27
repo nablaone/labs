@@ -12,7 +12,7 @@ function ECS() {
 ECS.prototype = {
    
     newEntity: function (name) {
-        let entity = {
+        var entity = {
             name: name
         };
         this.entities.push(entity);

@@ -37,7 +37,7 @@ function VelocitySystem(ecs) {
 
     var entities = ecs.filter("velocity");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
 
@@ -60,7 +60,7 @@ function GravitySystem(ecs) {
 
     var entities = ecs.filter("gravity");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
 
@@ -83,7 +83,7 @@ function DumpPositionSystem(ecs) {
 
     var entities = ecs.filter("position");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
         var pos = ecs.getComponent(e, "position");
@@ -101,7 +101,7 @@ function BoundarySystem(esc) {
 
     var entities = ecs.filter("bouncingRoof");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
         var pos = ecs.getComponent(e, "position");
@@ -116,7 +116,7 @@ function BoundarySystem(esc) {
 
     var entities = ecs.filter("bouncingFloor");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
         var pos = ecs.getComponent(e, "position");
@@ -131,7 +131,7 @@ function BoundarySystem(esc) {
 
     var entities = ecs.filter("dampingFloor");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
         var pos = ecs.getComponent(e, "position");
@@ -145,7 +145,7 @@ function BoundarySystem(esc) {
 
     var entities = ecs.filter("boundaryBounce");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
         var pos = ecs.getComponent(e, "position");
@@ -236,7 +236,7 @@ function KonvaPositionUpdateSystem(ecs) {
 
     var entities = ecs.filter("drawable");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
 
@@ -259,7 +259,7 @@ function CleanUpSpritesSystem(ecs) {
 
     var entities = ecs.filter("drawable");
 
-    for (let i = 0; i < entities.length; i++ ) {
+    for (var i = 0; i < entities.length; i++ ) {
 
         var e = entities[i];     
 
@@ -415,7 +415,7 @@ function initECS(layer) {
     ecs.addEventListener("jump", function(arg) {
         var entities = ecs.filter("player");
 
-        for (let i = 0; i < entities.length; i++ ) {
+        for (var i = 0; i < entities.length; i++ ) {
 
             var e = entities[i];     
 
