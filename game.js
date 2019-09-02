@@ -247,6 +247,9 @@ function KonvaPositionUpdateSystem(ecs) {
         var drawable = ecs.getComponent(e, "drawable");
         var position = ecs.getComponent(e, "position");
     
+        if (drawable.element == null) {
+            continue;
+        }
         drawable.element.setX(position.x);
         drawable.element.setY(HEIGHT - position.y - drawable.element.getHeight());
     }
@@ -360,8 +363,8 @@ function initECS(layer) {
         e1 = ecs.newEntity("e" + ecs.frame);
 
         var collidable = ecs.addComponent(e1, "collidable");
-        collidable.width = 30;
-        collidable.height = 30;
+        collidable.width = 32;
+        collidable.height = 32;
         ecs.addComponent(e1, "bouncingFloor");
         ecs.addComponent(e1, "bouncingRoof");
 
@@ -377,26 +380,55 @@ function initECS(layer) {
         var drawable = ecs.addComponent(e1,"drawable");
 
   //     create our shape
-        var el = new Konva.Rect({
+   
+        var group = new Konva.Group({
+            x:0,
+            y:0,
+            width: collidable.width,
+            height: collidable.height
+        });
+        layer.add(group);
+        drawable.element = group;
+
+        var rect = new Konva.Rect({
             x: 0,
             y: 0,
-            width: collidable.width,
-            height: collidable.height,
-            fill: 'red',
+            width: group.getWidth(),
+            height: group.getHeight(),
             stroke: 'black',
-            strokeWidth: 4,
+            strokeWidth: 1,
         });
-        layer.add(el)
-
-        drawable.element = el;
+        //group.add(rect);
 
         // kupa czy lizak
         if (Math.random() < 0.5) {
-            el.setFill("brown");
+
+            Konva.Image.fromURL('poop.png', function(img) {
+                img.setAttrs({
+                  x: 0,
+                  y: 0,
+                  scaleX: 1,
+                  scaleY: 1
+                });
+                
+                group.add(img);
+            });
+            
             collidable.points = -1;
             pos.y = 0;
         } else {
-            el.setFill("#ff0000");
+            Konva.Image.fromURL('candy.png', function(img) {
+                img.setAttrs({
+                  x: 0,
+                  y: 0,
+                  scaleX: 1,
+                  scaleY: 1
+                });
+                
+                group.add(img);
+            });
+      
+
             collidable.points = 1;
         }
     };
@@ -465,16 +497,15 @@ function initECS(layer) {
         
             var drawable = ecs.getComponent(entity, "drawable");
             drawable.element.rotate(45);
-            drawable.element.setFill("white");
+            //drawable.element.setFill("white");
 
         } else {
             console.log("SHIT");
 
             var drawable = ecs.getComponent(entity, "drawable");
 
-            drawable.element.setHeight(10);
-            drawable.element.setWidth(50);
-
+            
+            drawable.element.rotate(45);
         }
 
         ecs.removeComponent(entity, "collidable");
@@ -516,7 +547,14 @@ function createPlayer(layer,ecs) {
     pc.width = 100;
     pc.height = 100;
 
-    var el = new Konva.Rect({
+    var el = new Konva.Group();
+    el.setWidth(pc.width);
+    el.setHeight(pc.height);
+
+    layer.add(el);
+
+
+    var rect = new Konva.Rect({
         x: 0,
         y: 0,
         width: pc.width,
@@ -524,7 +562,22 @@ function createPlayer(layer,ecs) {
         stroke: 'black',
         strokeWidth: 1,
     });
-    layer.add(el);
+
+    //el.add(rect);
+    
+
+   
+    Konva.Image.fromURL('player.png', function(img) {
+        img.setAttrs({
+          0: 50,
+          0: 50,
+          scaleX: 2,
+          scaleY: 2
+        });
+        
+        el.add(img);
+      });
+
 
     drawable.element = el;
    
