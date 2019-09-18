@@ -5,7 +5,8 @@ WIDTH= 700;
 HEIGHT= 400;
 
 GRAVITY=0.05;
-JUMP_SPEED = 4;
+JUMP_SPEED = 5;
+SHIT_JUMP_SPEED = 1;
 PAN_SPEED=2;
 
 function initKonva() {
@@ -531,6 +532,23 @@ function initECS(layer, sounds) {
 
             sounds.fart.play();
             drawable.element.rotate(45);
+            var entities = ecs.filter("player");
+
+            for (var i = 0; i < entities.length; i++ ) {
+    
+                var e = entities[i];     
+    
+                if (!ecs.hasComponent(e,"position")) {
+                    continue;
+                }
+    
+                if (!ecs.hasComponent(e,"velocity")) {
+                    continue;
+                }
+    
+                var velocity = ecs.getComponent(e, "velocity");
+                velocity.y = SHIT_JUMP_SPEED;
+            }
         }
 
         ecs.removeComponent(entity, "collidable");
