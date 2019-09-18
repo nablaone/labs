@@ -4,6 +4,10 @@ console.log("game.js");
 WIDTH= 700;
 HEIGHT= 400;
 
+GRAVITY=0.05;
+JUMP_SPEED = 4;
+PAN_SPEED=2;
+
 function initKonva() {
     // first we need to create a stage
 
@@ -90,7 +94,7 @@ function GravitySystem(ecs) {
 
         var velocity = ecs.getComponent(e, "velocity");
 
-        velocity.y = velocity.y - 0.1;
+        velocity.y = velocity.y - GRAVITY;
         
   }
 
@@ -388,11 +392,11 @@ function initECS(layer, sounds) {
 
         var pos = ecs.addComponent(e1,"position");
         pos.x = WIDTH;
-        pos.y = HEIGHT * Math.random();
+        pos.y = (HEIGHT/3) * Math.random() + (HEIGHT / 3);
 
         var vel = ecs.addComponent(e1,"velocity");
 
-        vel.x = -1;
+        vel.x = - PAN_SPEED;
         vel.y = 0;
 
         var drawable = ecs.addComponent(e1,"drawable");
@@ -459,7 +463,7 @@ function initECS(layer, sounds) {
     ecs.registerEvent("jump");
 
     ecs.addEventListener("jump", function(arg) {
-        sounds.jump.play();
+        
         console.log("JUMP"); 
     });
 
@@ -484,7 +488,8 @@ function initECS(layer, sounds) {
             if (position.y > 0) {
                 continue;
             }
-            velocity.y = 8;
+            velocity.y = JUMP_SPEED;
+            sounds.jump.play();
         }
     });
 
