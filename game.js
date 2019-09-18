@@ -33,6 +33,24 @@ function initKonva() {
     return layer;
 };
 
+function initSound() {
+    var res = {};
+
+    res.fart = new Howl({
+        src: ["fart.mp3"]
+    });
+
+    res.jump = new Howl({
+        src: ["jump.mp3"]
+    });
+
+    res.points = new Howl({
+        src: ["star.mp3"]
+    });
+  
+    return res;
+}
+
 function VelocitySystem(ecs) {
 
     var entities = ecs.filter("velocity");
@@ -280,7 +298,7 @@ function CleanUpSpritesSystem(ecs) {
 }
 
 
-function initECS(layer) {
+function initECS(layer, sounds) {
 
     var ecs = new ECS();
 
@@ -441,6 +459,7 @@ function initECS(layer) {
     ecs.registerEvent("jump");
 
     ecs.addEventListener("jump", function(arg) {
+        sounds.jump.play();
         console.log("JUMP"); 
     });
 
@@ -499,12 +518,13 @@ function initECS(layer) {
             drawable.element.rotate(45);
             //drawable.element.setFill("white");
 
+            sounds.points.play();
         } else {
             console.log("SHIT");
 
             var drawable = ecs.getComponent(entity, "drawable");
 
-            
+            sounds.fart.play();
             drawable.element.rotate(45);
         }
 
@@ -586,7 +606,8 @@ function createPlayer(layer,ecs) {
 function init() {
     var layer = initKonva();
 
-    var ecs = initECS(layer);
+    var sounds = initSound();
+    var ecs = initECS(layer, sounds);
 
     createPlayer(layer,ecs);
     
