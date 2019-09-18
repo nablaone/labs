@@ -501,9 +501,13 @@ function initECS(layer, sounds) {
             e.preventDefault();
             return false;
         }
-        return;
-    })
 
+        return;
+    });
+
+    window.addEventListener("touchstart", function(e) {
+        ecs.trigger("jump", null);
+    });
     // add touch listener
 
     ecs.registerEvent("collision");
