@@ -4,7 +4,7 @@ import (
 	"io/ioutil"
 	"testing"
 
-	"github.com/nablaone/vertabelo2gorm"
+	"github.com/nablaone/vertabelo2sqlx"
 )
 
 func TestParse(t *testing.T) {
@@ -16,7 +16,7 @@ func TestParse(t *testing.T) {
 
 	}
 
-	_, err = vertabelo2gorm.Parse(b)
+	_, err = vertabelo2sqlx.Parse(b)
 
 	if err != nil {
 		t.Fatal(err)
