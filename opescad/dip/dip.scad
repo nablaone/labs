@@ -1,16 +1,37 @@
 $fn=100;
-// Volume
-V=3.5; //[1:20]
+
+// Volume ccm
+V=3.8; //[1:20]
+
+
+// prints 
+Ve1=380; // expected
+Va1=9.8*3.14*((6.8/2)^2); // printed
+shrinkF1=Va1/Ve1; // shrink factor
+echo("SHRINK1",Va1,Ve1,shrinkF1); 
+
+
+Ve2=350;
+Va2=8.85*3.14*((6.75/2)^2);
+shrinkF2=Va2/Ve2;
+echo("SHRINK2",Va2,Ve2,shrinkF2); 
+
+// 
+shrinkF=(shrinkF1+shrinkF2)/2;
+
+echo("Shrink", shrinkF);
+
+
 
 
 r=3.5;
 
-h=V*100/(3.14*r*r);
+h=V*(1/shrinkF)*100/(3.14*r*r);
 echo(r,h);
 
 wall=1;
 
-echo("VOLUMNE", h * 3.14  * r *r);
+echo("Computed VOLUME", h * 3.14  * r *r);
 
 handle=90;
 handleZ=3;
