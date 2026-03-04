@@ -5,6 +5,7 @@ Play Notes Tool - Play notes on Waldorf Blofeld synthesizer.
 Usage:
     python play_notes.py --test           # Play C4, E4, G4 test notes
     python play_notes.py --minor7         # Play C minor 7 chord
+    python play_notes.py --industrial     # Play dissonant cluster F3, F#3, B3
     python play_notes.py --notes "C4 E4 G4 Bb4"  # Play custom melody
 """
 
@@ -87,6 +88,19 @@ def play_minor7_chord(blo: Blofeld) -> None:
         blo.note_off(n)
 
 
+def play_industrial(blo: Blofeld) -> None:
+    """Play dissonant cluster F3, F#3, B3 for 10 seconds."""
+    cluster = [53, 54, 59]  # F3, F#3, B3 — tritone + semitone cluster
+
+    for n in cluster:
+        blo.note_on(n, 110)
+
+    time.sleep(10.0)
+
+    for n in cluster:
+        blo.note_off(n)
+
+
 def play_notes_from_text(blo: Blofeld, notes_text: str) -> None:
     """Play a melody from text notation."""
     tokens = re.split(r'[\s,;|]+', notes_text)
@@ -113,6 +127,7 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--test', action='store_true', help='Play C4, E4, G4 test notes')
     group.add_argument('--minor7', action='store_true', help='Play C minor 7 chord')
+    group.add_argument('--industrial', action='store_true', help='Play dissonant cluster F3, F#3, B3')
     group.add_argument('--notes', '-n', help='Notes to play (e.g., "C4 E4 G4")')
     args = parser.parse_args()
 
@@ -124,6 +139,9 @@ def main():
             elif args.minor7:
                 play_minor7_chord(blo)
                 print("Played C minor 7 chord")
+            elif args.industrial:
+                play_industrial(blo)
+                print("Played industrial cluster: F3, F#3, B3")
             elif args.notes:
                 play_notes_from_text(blo, args.notes)
                 print(f"Played notes: {args.notes}")

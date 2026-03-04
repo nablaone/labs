@@ -29,6 +29,7 @@ Test the current sound:
 ```bash
 uv run python3 play_notes.py --test              # C4, E4, G4
 uv run python3 play_notes.py --minor7            # Cm7 chord (10 sec)
+uv run python3 play_notes.py --industrial        # Dissonant cluster F3, F#3, B3 (industrial/dark pads)
 uv run python3 play_notes.py --notes "C4 E4 G4"  # Custom melody
 ```
 
