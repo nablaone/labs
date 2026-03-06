@@ -1,0 +1,13 @@
+{
+  "name": "blofeld-nn",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "Blofeld NN Web UI",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "postCreateCommand": "pip install uv --quiet && uv sync",
+  "remoteUser": "vscode"
+}

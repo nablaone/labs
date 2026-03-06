@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLOFELD NEURAL</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"
+          crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <!-- ── TOP BAR ─────────────────────────────────────────── -->
+  <header id="topbar">
+    <div id="status-block">
+      <span id="status-dot"></span>
+      <span id="status-text">DISCONNECTED</span>
+    </div>
+    <button id="btn-connect">CONNECT</button>
+    <div id="patch-block">
+      <label>BANK</label>
+      <select id="sel-bank">
+        <option>A</option><option>B</option><option>C</option><option>D</option>
+        <option>E</option><option>F</option><option>G</option><option>H</option>
+      </select>
+      <label>PATCH</label>
+      <input id="inp-patch" type="number" min="1" max="128" value="1">
+    </div>
+    <div id="midi-ch-block">
+      <label>CH</label>
+      <input id="inp-channel" type="number" min="1" max="16" value="1">
+    </div>
+  </header>
+
+  <!-- ── MAIN ───────────────────────────────────────────── -->
+  <main>
+    <div id="knob-grid">
+      <!-- populated by app.js -->
+    </div>
+
+    <div id="send-row">
+      <button id="btn-send">SEND</button>
+    </div>
+  </main>
+
+  <!-- ── BOTTOM ─────────────────────────────────────────── -->
+  <footer>
+    <div id="rhythm-row">
+      <button class="btn-rhythm" data-pattern="4x4">4×4</button>
+      <button class="btn-rhythm" data-pattern="clave">CLAVE</button>
+      <button class="btn-rhythm" data-pattern="gallop">GALLOP</button>
+    </div>
+    <div id="chord-row">
+      <button class="btn-chord" data-notes="60,64,67">CMAJ</button>
+      <button class="btn-chord" data-notes="60,63,67">CMIN</button>
+      <button class="btn-chord" data-notes="60,63,67,70">CMIN7</button>
+      <button class="btn-chord" data-notes="53,54,59">F·F#·B</button>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
