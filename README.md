@@ -2,6 +2,9 @@
 
 A neural network patch generator for the Waldorf Blofeld synthesizer. Describe a sound using a set of perceptual sliders and the network generates a complete Blofeld patch — instantly, in the browser.
 
+[Demo](https://www.youtube.com/shorts/oeYzk1UsxQk)
+
+
 ## What it does
 
 Instead of tweaking hundreds of parameters, you work with human concepts: *brightness*, *texture*, *movement*, *weight*, *harshness* and eleven more. The neural network, trained on over a thousand real Blofeld patches, translates these into a full patch and sends it to your synthesizer via MIDI SysEx.
