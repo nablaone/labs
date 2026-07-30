@@ -54,6 +54,23 @@ dkms.conf
 .vscode/
 # Binaries for programs and plugins
 *.exe
+
+# Secrets
+aws/server1-manage/assets/keyId.txt
+aws/server1-manage/assets/secretKey.txt
+
+# macOS
+.DS_Store
+
+# Garmin Connect IQ build output
+garmin/helloworld/build/
+garmin/helloworld/bin/
+
+# Compiled Go binaries
+go/game/game
+go/x/x
+go/wasm/main.wasm
+midi/test1/test1
 *.exe~
 =======
 # Binaries for programs and plugins
