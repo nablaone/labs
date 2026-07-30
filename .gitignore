@@ -71,6 +71,7 @@ go/game/game
 go/x/x
 go/wasm/main.wasm
 midi/test1/test1
+x/a
 *.exe~
 =======
 # Binaries for programs and plugins
