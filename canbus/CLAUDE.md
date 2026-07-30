@@ -19,7 +19,8 @@ the bus to sniff and inject traffic.
   otherwise.
 - **Bus**: 120Ω termination at both physical ends.
 
-Full research notes/citations: [docs/dev-setup-research.md](docs/dev-setup-research.md).
+Full research notes/citations: [docs/dev-setup-research.md](docs/dev-setup-research.md),
+[docs/freertos-notes.md](docs/freertos-notes.md), [docs/cli-toolchain.md](docs/cli-toolchain.md).
 
 ## Firmware targets
 
@@ -27,20 +28,36 @@ Both RTOSes on both boards — four combinations:
 
 | | Pico (RP2040) | STM32 |
 |---|---|---|
-| **FreeRTOS** | Official SMP port in FreeRTOS-Kernel (`portable/ThirdParty/GCC/RP2040/`), on top of pico-sdk. No built-in CAN driver — bring our own MCP2515 driver. | Standard STM32Cube + FreeRTOS middleware path; CAN via HAL CAN/FDCAN driver. |
+| **FreeRTOS** | Official SMP port in FreeRTOS-Kernel (`portable/ThirdParty/GCC/RP2040/`), on top of pico-sdk. No built-in CAN driver — bring our own MCP2515 driver. | **libopencm3** (not STM32Cube HAL — see below), Makefile build; CAN/FDCAN init hand-written against libopencm3's register-level API. |
 | **Zephyr** | Supported since Zephyr 3.0 (`rpi_pico` board). MCP2515 has a native Zephyr shield driver. | Native `can_stm32_bxcan` / FDCAN drivers in-tree; CAN pins need a devicetree/pinctrl overlay since the transceiver isn't on-board. |
 
 Apps themselves stay simple: blink an LED, read a button, and use those to
 drive/react to CAN frames — the point is exercising the CAN stack and dev
 loop on both RTOS/board combos, not the app logic.
 
+**Zephyr shares one app directory across both boards** — board differences
+are isolated to devicetree overlays/Kconfig fragments, app code stays
+identical. FreeRTOS needs two separate trees since Pico (pico-sdk/CMake) and
+STM32 (libopencm3/Makefile) are different build systems with no shared
+abstraction underneath. See
+[docs/zephyr-single-app.md](docs/zephyr-single-app.md).
+
 ## Dev environment
 
-- **Linux-based, Docker for all builds.** Zephyr publishes an official dev
-  image (`zephyrproject-rtos/docker-image`) built around `west build`. For
-  Pico/STM32 FreeRTOS, a container with `arm-none-eabi-gcc` + `cmake` +
-  the relevant SDK (pico-sdk / STM32Cube) covers both — likely shareable
-  as one `arm-none-eabi` image.
+- **Linux-based, Docker for all builds, CLI-only — no GUI tools anywhere in
+  the loop** (no STM32CubeIDE/CubeMX, no vendor IDEs at all).
+  - Zephyr (both boards): `west build` — already CLI-native by design.
+  - Pico + FreeRTOS: CMake + Ninja + `arm-none-eabi-gcc`, already CLI-native.
+  - STM32 + FreeRTOS: **libopencm3** instead of STM32Cube HAL, plain
+    Makefile build. This is the one platform combo where the default
+    workflow (STM32CubeMX/CubeIDE) is graphical; libopencm3 sidesteps it
+    entirely rather than scripting CubeMX headlessly (which still needs an
+    X11 display via Xvfb even in "headless" mode). Tradeoff: CAN/FDCAN
+    peripheral setup is hand-written against libopencm3's API instead of
+    generated — see [docs/cli-toolchain.md](docs/cli-toolchain.md) for the
+    full reasoning.
+  - Flashing/debugging standardized on **OpenOCD + GDB** for both boards
+    (ST-Link/SWD for STM32, picoprobe/CMSIS-DAP/SWD for Pico), all CLI.
 - **macOS caveat**: Docker Desktop on macOS runs containers in a Linux VM,
   not on the host kernel, so USB passthrough to debug probes (ST-Link,
   picoprobe/CMSIS-DAP) and CAN adapters is unreliable. Building in a
@@ -78,13 +95,19 @@ Mac can't join the bus natively.
   tried). See [notebook/README.md](notebook/README.md).
 - `docs/` — reference material as markdown: datasheet notes, scrubbed web
   excerpts, protocol references, cited. See [docs/README.md](docs/README.md).
-- `firmware/` — not created yet; will hold one project per
-  board × RTOS combination once hardware is in hand.
+- `firmware/zephyr-canbus/` — the shared Zephyr app (both boards). Has a
+  working Docker + Makefile dev setup and an initial blink/button demo
+  (defaults to `rpi_pico`); STM32 overlay still to add once that board is
+  chosen. See [firmware/zephyr-canbus/README.md](firmware/zephyr-canbus/README.md).
+- `firmware/pico-freertos/`, `firmware/stm32-freertos/` — not created yet.
 - `docker/` — not created yet; toolchain Dockerfiles.
 
 ## Open questions
 
-- Exact STM32 board (Nucleo model) not chosen yet.
+- Exact STM32 board (Nucleo model) not chosen yet — if it ends up
+  FDCAN-only (G4/H7-class), double check libopencm3's FDCAN support for
+  that specific chip before committing; libopencm3's bxCAN support is much
+  more battle-tested.
 - MCP2515 vs MCP2518FD vs just buying a CANBed RP2040 for the Pico side.
 - Which physical machine becomes the permanent Linux/RPi dev+flash+CAN-gateway
   host.

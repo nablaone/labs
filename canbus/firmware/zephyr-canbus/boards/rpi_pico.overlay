@@ -1,0 +1,33 @@
+/*
+ * External LED on GP20 (LED + resistor to GND, active high) and an
+ * external push-button on GP21 (button to GND, active low, using the
+ * pin's internal pull-up -- no external resistor needed).
+ *
+ * Deliberately not using the Pico's onboard LED (GP25) so the same
+ * wiring pattern generalizes to the STM32 board later. Pins chosen to
+ * stay clear of the Pico's default SPI0 pins (GP16-19), which the
+ * MCP2515 CAN controller shield will need.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	leds {
+		/* merges into the board's existing "leds" node */
+		led1: led_1 {
+			gpios = <&gpio0 20 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = <&gpio0 21 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		};
+	};
+
+	aliases {
+		led0 = &led1;
+		sw0 = &button0;
+	};
+};

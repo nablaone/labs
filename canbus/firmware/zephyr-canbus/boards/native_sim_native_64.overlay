@@ -1,0 +1,41 @@
+/*
+ * Emulated LED/button so the app runs in Zephyr's native_sim "emulator"
+ * (a host Linux binary, no real hardware) via the zephyr,gpio-emul
+ * driver. There's no physical button here -- main.c auto-toggles it
+ * periodically when CONFIG_GPIO_EMUL is set (see boards/native_sim.conf),
+ * purely to demonstrate the blink-rate change without hardware.
+ *
+ * Node names are prefixed (canbus_*) to avoid colliding with whatever
+ * native_sim's own base devicetree already defines under /leds, /buttons.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	gpio_emul0: gpio_emul0 {
+		compatible = "zephyr,gpio-emul";
+		gpio-controller;
+		#gpio-cells = <2>;
+		ngpios = <8>;
+		status = "okay";
+	};
+
+	canbus_leds {
+		compatible = "gpio-leds";
+		led1: led_1 {
+			gpios = <&gpio_emul0 0 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	canbus_buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = <&gpio_emul0 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		};
+	};
+
+	aliases {
+		led0 = &led1;
+		sw0 = &button0;
+	};
+};
