@@ -2,9 +2,10 @@
 # is bind-mounted from the host at /app (see Makefile) rather than copied
 # in, so editing on the host and rebuilding in the container is instant.
 #
-# First build fetches the full Zephyr workspace (~1-2GB) plus the ARM SDK
-# toolchain (~1-2GB) — expect it to take a while and produce a multi-GB
-# image. Subsequent builds are cached unless ZEPHYR_REVISION changes.
+# First build fetches the full Zephyr workspace (~1-2GB) plus the ARM and
+# Xtensa SDK toolchains (~1-2GB combined) — expect it to take a while and
+# produce a multi-GB image. Subsequent builds are cached unless
+# ZEPHYR_REVISION changes.
 
 FROM debian:trixie-slim
 
@@ -38,16 +39,52 @@ WORKDIR /opt/zephyrproject
 # `west init`'s own manifest-repo clone isn't shallow even with --narrow (that
 # only affects `west update`'s module clones) -- so shallow-clone Zephyr
 # ourselves first and point west at it with `-l` instead.
+# `west update` fetches dozens of module repos; on a flaky connection at
+# least one of them tends to hit the same kind of transient clone failure
+# as above, so retry the whole command a few times (already-fetched modules
+# are left alone on a retry, only the failed one(s) redo any work).
 RUN git clone --depth 1 --branch ${ZEPHYR_REVISION} https://github.com/zephyrproject-rtos/zephyr zephyr \
     && west init -l zephyr \
-    && west update --narrow -o=--depth=1 \
+    && (west update --narrow -o=--depth=1 \
+        || west update --narrow -o=--depth=1 \
+        || west update --narrow -o=--depth=1) \
     && west zephyr-export \
     && pip install --no-cache-dir -r zephyr/scripts/requirements.txt
 
-# ARM toolchain only (this lab targets Cortex-M on Pico + STM32) — skips
-# the other architectures' toolchains to save a lot of download/disk space.
-RUN west sdk install --toolchains arm-zephyr-eabi
+# Kept as its own layer (not appended above) so tweaking it doesn't bust the
+# cache on the expensive west update step.
+RUN pip install --no-cache-dir esptool
+
+# ARM toolchain for the Pico (Cortex-M), Xtensa toolchain for the ESP32 --
+# skips every other architecture's toolchain to save download/disk space.
+# Retried like west update above -- this download has stalled mid-transfer
+# on a flaky connection too.
+RUN (west sdk install --toolchains arm-zephyr-eabi xtensa-espressif_esp32_zephyr-elf \
+    || west sdk install --toolchains arm-zephyr-eabi xtensa-espressif_esp32_zephyr-elf \
+    || west sdk install --toolchains arm-zephyr-eabi xtensa-espressif_esp32_zephyr-elf)
 
 ENV ZEPHYR_BASE=/opt/zephyrproject/zephyr
+
+# Espressif's QEMU fork -- real Xtensa CPU + peripheral emulation for ESP32,
+# unlike native_sim (a host binary with GPIO faked). Prebuilt binary release,
+# not built from source (much faster, and doesn't need the full X11/SDL/GTK
+# build dependency chain). aarch64-linux-gnu matches this image's arch
+# (built on Apple Silicon); switch to the x86_64-linux-gnu asset if building
+# on an Intel host.
+# Own apt-get layer (not folded into the main one above) so touching QEMU
+# deps doesn't bust the cache on the expensive west update/sdk install
+# steps that come before it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpixman-1-0 libslirp0 libgcrypt20 \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG QEMU_ESP_RELEASE=esp-develop-9.2.2-20260417
+RUN wget -qO /tmp/qemu-esp.tar.xz \
+        "https://github.com/espressif/qemu/releases/download/${QEMU_ESP_RELEASE}/qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz" \
+    && mkdir -p /opt/espressif-qemu \
+    && tar -xf /tmp/qemu-esp.tar.xz -C /opt/espressif-qemu --strip-components=1 \
+    && rm /tmp/qemu-esp.tar.xz
+ENV PATH="/opt/espressif-qemu/bin:${PATH}"
+RUN qemu-system-xtensa --version
 
 CMD ["bash"]

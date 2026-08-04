@@ -3,6 +3,14 @@
 Requirement: no GUI tools anywhere in the dev loop — everything scriptable,
 Dockerizable, and reproducible from the command line.
 
+**Historical note (2026-08-01)**: this doc's STM32 sections describe
+research for a board that's no longer in this lab — the plan moved to an
+ESP32 DevKit (see [esp32-notes.md](esp32-notes.md)). Kept as-is since it's
+a real decision record, and because ESP32's toolchain (`idf.py`/`west`) was
+already CLI-native from the start — none of the CubeMX/libopencm3 tradeoff
+below applies to it. If STM32 ever comes back into this lab, this doc is
+still the starting point.
+
 ## Where this is a non-issue
 
 - **Zephyr** (both Pico and STM32): always CLI. `west build` / `west flash`

@@ -1,8 +1,13 @@
 # CAN bus lab — dev setup research
 
 Findings from initial research (2026-07-30) into toolchains and connectivity
-options for the RP2040 (Pico) + STM32 + FreeRTOS/Zephyr CAN bus lab. See
+options for the RP2040 (Pico) + FreeRTOS/Zephyr CAN bus lab. See
 [../CLAUDE.md](../CLAUDE.md) for the decisions distilled from this.
+
+Note: the second board was originally planned as STM32 (see the STM32
+section below, kept for reference) and was later replaced with the ESP32
+DevKit actually acquired (2026-07-31) — see [esp32-notes.md](esp32-notes.md)
+for that platform's research.
 
 ## RP2040 / Raspberry Pi Pico
 
@@ -92,12 +97,17 @@ Practical implications:
   BOOTSEL drive) needs no special driver and works fine natively from macOS
   — no container/USB passthrough involved at all. This is the easy path
   regardless of host OS.
-- **SWD debugging / OpenOCD / picotool / st-flash** all want direct USB
-  access to a probe — this is where Mac + Docker breaks down.
-- Net recommendation: do the actual flashing/debugging on a **Linux box or
-  spare Raspberry Pi**, where Docker shares the host kernel and `--device`/
-  udev-based USB passthrough just works. The Mac remains fine as an editor/
-  SSH client into that box.
+- **ESP32 flashing via `esptool`** is the same story: it's a plain Python
+  tool talking to a USB-serial port (the DevKit's onboard CP2102 chip), not
+  a debug-probe protocol, so it installs and runs natively on macOS with no
+  container involved — see [esp32-notes.md](esp32-notes.md).
+- **SWD debugging / OpenOCD / picotool** all want direct USB access to a
+  probe — this is where Mac + Docker breaks down. Only relevant to the Pico
+  side of this lab.
+- Net recommendation: do Pico SWD debugging on a **Linux box or spare
+  Raspberry Pi**, where Docker shares the host kernel and `--device`/
+  udev-based USB passthrough just works. ESP32 flashing and general editing
+  are both fine directly from the Mac.
 
 ## Laptop ↔ CAN bus connectivity (sniffing / sending)
 

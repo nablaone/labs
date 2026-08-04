@@ -11,9 +11,11 @@ the bus to sniff and inject traffic.
   CAN-FD) plus a transceiver. Alternative: the Longan Labs CANBed RP2040
   bundles RP2040 + MCP2515 + transceiver on one board and has a Zephyr board
   definition already, which would skip the wiring.
-- **STM32** (board TBD) — CAN is built into the MCU (bxCAN on F0/F1/F2/F3/
-  F4/F7, FDCAN on G0/G4/H7/L5), but no STM32 part has an on-chip
-  transceiver, so an external one is always needed.
+- **ESP32** (board in hand: [Botland ESP32 WROOM-32 DevKit](https://botland.com.pl/esp32/8893-esp32-wifi-bt-42-platforma-z-modulem-esp-wroom-32-zgodny-z-esp32-devkit-5904422337438.html),
+  an ESP32-DevKitC-compatible board) — CAN is built into the chip as the
+  **TWAI** peripheral (Espressif's name for a CAN 2.0-compatible
+  controller), but like STM32 there's no on-chip transceiver, so an
+  external one is still needed.
 - **Transceiver**: standardize on **SN65HVD230** breakouts (3.3V logic,
   matches both boards' GPIO directly) unless a specific board dictates
   otherwise.
@@ -26,10 +28,10 @@ Full research notes/citations: [docs/dev-setup-research.md](docs/dev-setup-resea
 
 Both RTOSes on both boards — four combinations:
 
-| | Pico (RP2040) | STM32 |
+| | Pico (RP2040) | ESP32 |
 |---|---|---|
-| **FreeRTOS** | Official SMP port in FreeRTOS-Kernel (`portable/ThirdParty/GCC/RP2040/`), on top of pico-sdk. No built-in CAN driver — bring our own MCP2515 driver. | **libopencm3** (not STM32Cube HAL — see below), Makefile build; CAN/FDCAN init hand-written against libopencm3's register-level API. |
-| **Zephyr** | Supported since Zephyr 3.0 (`rpi_pico` board). MCP2515 has a native Zephyr shield driver. | Native `can_stm32_bxcan` / FDCAN drivers in-tree; CAN pins need a devicetree/pinctrl overlay since the transceiver isn't on-board. |
+| **FreeRTOS** | Official SMP port in FreeRTOS-Kernel (`portable/ThirdParty/GCC/RP2040/`), on top of pico-sdk. No built-in CAN driver — bring our own MCP2515 driver. | **ESP-IDF** — Espressif's own fork of FreeRTOS (dual-core SMP, like Pico) is the default RTOS baked into ESP-IDF, built via `idf.py` (CLI-native, no code generator). TWAI driver is built in. |
+| **Zephyr** | Supported since Zephyr 3.0 (`rpi_pico` board). MCP2515 has a native Zephyr shield driver. | Supported via the `esp32_devkitc` board (Xtensa toolchain). Native `can_esp32_twai` driver in-tree. |
 
 Apps themselves stay simple: blink an LED, read a button, and use those to
 drive/react to CAN frames — the point is exercising the CAN stack and dev
@@ -38,41 +40,57 @@ loop on both RTOS/board combos, not the app logic.
 **Zephyr shares one app directory across both boards** — board differences
 are isolated to devicetree overlays/Kconfig fragments, app code stays
 identical. FreeRTOS needs two separate trees since Pico (pico-sdk/CMake) and
-STM32 (libopencm3/Makefile) are different build systems with no shared
+ESP32 (ESP-IDF/`idf.py`) are different build systems with no shared
 abstraction underneath. See
 [docs/zephyr-single-app.md](docs/zephyr-single-app.md).
+
+**Both Zephyr boards can run without hardware.** `make run` (Pico) uses
+`native_sim` — a host binary with GPIO faked via `zephyr,gpio-emul`.
+`make run-esp32-qemu` (ESP32) uses Espressif's own QEMU fork — real Xtensa
+CPU + peripheral emulation, closer to actual hardware, at the cost of no
+interactive button-press simulation (unlike `native_sim`'s scripted
+auto-toggle). Both verified working (2026-08-01). See
+[firmware/zephyr-canbus/README.md](firmware/zephyr-canbus/README.md) and
+[docs/esp32-notes.md](docs/esp32-notes.md#emulator-espressifs-qemu-fork-verified-working-2026-08-01).
 
 ## Dev environment
 
 - **Linux-based, Docker for all builds, CLI-only — no GUI tools anywhere in
-  the loop** (no STM32CubeIDE/CubeMX, no vendor IDEs at all).
+  the loop** (no vendor IDEs at all).
   - Zephyr (both boards): `west build` — already CLI-native by design.
   - Pico + FreeRTOS: CMake + Ninja + `arm-none-eabi-gcc`, already CLI-native.
-  - STM32 + FreeRTOS: **libopencm3** instead of STM32Cube HAL, plain
-    Makefile build. This is the one platform combo where the default
-    workflow (STM32CubeMX/CubeIDE) is graphical; libopencm3 sidesteps it
-    entirely rather than scripting CubeMX headlessly (which still needs an
-    X11 display via Xvfb even in "headless" mode). Tradeoff: CAN/FDCAN
-    peripheral setup is hand-written against libopencm3's API instead of
-    generated — see [docs/cli-toolchain.md](docs/cli-toolchain.md) for the
-    full reasoning.
-  - Flashing/debugging standardized on **OpenOCD + GDB** for both boards
-    (ST-Link/SWD for STM32, picoprobe/CMSIS-DAP/SWD for Pico), all CLI.
+  - ESP32 + FreeRTOS (via ESP-IDF): `idf.py` — also already CLI-native by
+    design, no code generator exists for ESP32 at all. Unlike STM32 (the
+    board originally planned here — see below), there was never a
+    GUI-tooling problem to solve on this platform.
+  - Flashing/debugging: **OpenOCD + GDB** over SWD for Pico. ESP32 flashes
+    over plain **USB-serial via `esptool`** — no debug probe needed at all.
 - **macOS caveat**: Docker Desktop on macOS runs containers in a Linux VM,
-  not on the host kernel, so USB passthrough to debug probes (ST-Link,
-  picoprobe/CMSIS-DAP) and CAN adapters is unreliable. Building in a
-  container on the Mac is fine; flashing/debugging from that container is
-  the problem.
+  not on the host kernel, so USB passthrough to debug probes (picoprobe/
+  CMSIS-DAP) and CAN adapters is unreliable. Building in a container on the
+  Mac is fine; flashing/debugging from that container is the problem.
   - Exception: **Pico UF2 flashing** (drag-and-drop onto the BOOTSEL mass
     storage drive) needs no driver and works natively from macOS — no
     Docker/USB passthrough involved.
+  - Exception: **ESP32 flashing via `esptool`** also works natively from
+    macOS with no Docker involvement — it's a plain Python tool talking to
+    a USB-serial port (the DevKit's onboard CP2102), not a debug-probe
+    protocol. `make flash-esp32` in `firmware/zephyr-canbus/` runs it
+    natively rather than through the container for exactly this reason.
   - Everything else that needs direct USB access to a probe (OpenOCD,
-    picotool over SWD, st-flash) should run on a **Linux box or spare
-    Raspberry Pi**, where Docker shares the host kernel and USB passthrough
-    just works.
-- **Plan**: Mac is the editor/SSH client; a Linux box or RPi is the actual
-  build+flash+debug host (and doubles as the CAN gateway, see below). Which
-  physical machine that is — TBD.
+    picotool over SWD) should run on a **Linux box or spare Raspberry Pi**,
+    where Docker shares the host kernel and USB passthrough just works.
+- **Plan**: Mac handles ESP32 flashing directly (no detour needed) and is
+  the editor/SSH client generally; a Linux box or RPi is still needed for
+  Pico SWD debug-probe work and doubles as the CAN gateway (see below).
+  Which physical machine that is — TBD.
+
+**Board history**: this lab originally planned an STM32 board (Nucleo,
+TBD), which drove the `docs/cli-toolchain.md` research into libopencm3 vs.
+CubeMX. That STM32 plan was replaced with the ESP32 DevKit actually in
+hand — kept `docs/cli-toolchain.md` as-is since it documents a real decision
+process worth having on file, even though it no longer describes the
+board currently in use.
 
 ## Laptop ↔ CAN bus (sniff / send)
 
@@ -95,19 +113,20 @@ Mac can't join the bus natively.
   tried). See [notebook/README.md](notebook/README.md).
 - `docs/` — reference material as markdown: datasheet notes, scrubbed web
   excerpts, protocol references, cited. See [docs/README.md](docs/README.md).
-- `firmware/zephyr-canbus/` — the shared Zephyr app (both boards). Has a
-  working Docker + Makefile dev setup and an initial blink/button demo
-  (defaults to `rpi_pico`); STM32 overlay still to add once that board is
-  chosen. See [firmware/zephyr-canbus/README.md](firmware/zephyr-canbus/README.md).
-- `firmware/pico-freertos/`, `firmware/stm32-freertos/` — not created yet.
+- `firmware/zephyr-canbus/` — the shared Zephyr app (both boards). Working
+  Docker + Makefile dev setup, blink/button demo build-verified on both
+  `rpi_pico` and `esp32_devkitc/esp32/procpu`. See
+  [firmware/zephyr-canbus/README.md](firmware/zephyr-canbus/README.md).
+- `firmware/pico-freertos/`, `firmware/esp32-idf/` — not created yet.
 - `docker/` — not created yet; toolchain Dockerfiles.
 
 ## Open questions
 
-- Exact STM32 board (Nucleo model) not chosen yet — if it ends up
-  FDCAN-only (G4/H7-class), double check libopencm3's FDCAN support for
-  that specific chip before committing; libopencm3's bxCAN support is much
-  more battle-tested.
 - MCP2515 vs MCP2518FD vs just buying a CANBed RP2040 for the Pico side.
 - Which physical machine becomes the permanent Linux/RPi dev+flash+CAN-gateway
-  host.
+  host (still needed for Pico SWD debug-probe work and the CAN adapter; no
+  longer needed for ESP32 flashing, which works directly from the Mac).
+- ESP32 TWAI CAN pin wiring (which GPIOs to use) not yet decided /
+  overlay not yet written — GPIO32/33 (LED/button) were chosen to stay
+  clear of the common TWAI default pins, see
+  [firmware/zephyr-canbus/boards/esp32_devkitc_esp32_procpu.overlay](firmware/zephyr-canbus/boards/esp32_devkitc_esp32_procpu.overlay).

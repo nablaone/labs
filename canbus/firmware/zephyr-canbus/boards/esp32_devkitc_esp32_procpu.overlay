@@ -1,0 +1,33 @@
+/*
+ * External LED on GPIO32 (LED + resistor to GND, active high) and an
+ * external push-button on GPIO33 (button to GND, active low, using the
+ * pin's internal pull-up -- no external resistor needed).
+ *
+ * GPIO32/33 avoid the strapping pins (0, 2, 5, 12, 15) and stay clear of
+ * the default TWAI (CAN) RX/TX pins, which the CAN work will need later.
+ * Node names are unique (canbus_*) to avoid any collision with whatever
+ * the board's own base devicetree already defines.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	canbus_leds {
+		compatible = "gpio-leds";
+		canbus_led0: led_0 {
+			gpios = <&gpio0 32 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	canbus_buttons {
+		compatible = "gpio-keys";
+		canbus_button0: button_0 {
+			gpios = <&gpio0 33 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		};
+	};
+
+	aliases {
+		led0 = &canbus_led0;
+		sw0 = &canbus_button0;
+	};
+};
