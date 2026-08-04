@@ -124,9 +124,13 @@ Mac can't join the bus natively.
 
 - MCP2515 vs MCP2518FD vs just buying a CANBed RP2040 for the Pico side.
 - Which physical machine becomes the permanent Linux/RPi dev+flash+CAN-gateway
-  host (still needed for Pico SWD debug-probe work and the CAN adapter; no
-  longer needed for ESP32 flashing, which works directly from the Mac).
+  host — this Linux box has been doing that job de facto since 2026-08-04
+  (CANable2 bridged to SocketCAN via `canbus/scripts/setup-socketcan.sh`,
+  ESP32 flashed and running over USB-serial 2026-08-05), but that's not yet
+  a deliberate decision, just what's plugged in. Still needed regardless
+  for Pico SWD debug-probe work.
 - ESP32 TWAI CAN pin wiring (which GPIOs to use) not yet decided /
-  overlay not yet written — GPIO32/33 (LED/button) were chosen to stay
-  clear of the common TWAI default pins, see
+  overlay not yet written — GPIO33 (button) was chosen to stay clear of
+  the common TWAI default pins; LED moved to GPIO2 (this board's onboard
+  LED, confirmed 2026-08-05) instead of the originally-planned GPIO32, see
   [firmware/zephyr-canbus/boards/esp32_devkitc_esp32_procpu.overlay](firmware/zephyr-canbus/boards/esp32_devkitc_esp32_procpu.overlay).

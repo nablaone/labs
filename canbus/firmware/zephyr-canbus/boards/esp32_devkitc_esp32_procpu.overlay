@@ -1,10 +1,23 @@
 /*
- * External LED on GPIO32 (LED + resistor to GND, active high) and an
- * external push-button on GPIO33 (button to GND, active low, using the
- * pin's internal pull-up -- no external resistor needed).
+ * LED on GPIO2 -- this board's onboard user LED (confirmed by test 2026-08-05:
+ * swapped led0 here and watched it blink on real hardware), not the
+ * originally-planned external one. GPIO2 is one of the ESP32's strapping
+ * pins (sampled at boot to select flash/boot mode), which is exactly why
+ * the original design put the LED on GPIO32 instead -- but board vendors
+ * routinely wire an onboard LED to GPIO2 anyway because its loading is
+ * light enough not to disturb boot-mode sensing in practice, and that's
+ * borne out here too (flashes/boots fine). Traded the strapping-pin
+ * purity for zero wiring needed to see the app do something.
  *
- * GPIO32/33 avoid the strapping pins (0, 2, 5, 12, 15) and stay clear of
- * the default TWAI (CAN) RX/TX pins, which the CAN work will need later.
+ * External push-button stays on GPIO33 (button to GND, active low, using
+ * the pin's internal pull-up -- no external resistor needed) -- still
+ * needs breadboard wiring. The only onboard button is BOOT (GPIO0, a
+ * strapping pin itself, already defined as this board's own sw0 in
+ * Zephyr's base esp32_devkitc board.dts) -- usable in principle, but a
+ * dedicated external button keeps app input off a boot-mode-sensitive pin.
+ *
+ * GPIO33 avoids the strapping pins and stays clear of the default TWAI
+ * (CAN) RX/TX pins, which the CAN work will need later.
  * Node names are unique (canbus_*) to avoid any collision with whatever
  * the board's own base devicetree already defines.
  */
@@ -15,7 +28,7 @@
 	canbus_leds {
 		compatible = "gpio-leds";
 		canbus_led0: led_0 {
-			gpios = <&gpio0 32 GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
 		};
 	};
 

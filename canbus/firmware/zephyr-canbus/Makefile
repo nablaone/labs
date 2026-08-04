@@ -3,7 +3,7 @@ BOARD ?= rpi_pico
 BUILD_DIR = build-$(subst /,_,$(BOARD))
 APP_DIR := $(CURDIR)
 
-.PHONY: image build run run-esp32-qemu shell flash flash-esp32 clean
+.PHONY: image build run run-esp32-qemu shell flash flash-esp32 console-esp32 clean
 
 image:
 	docker build -t $(IMAGE) .
@@ -62,6 +62,13 @@ ESPTOOL := $(shell command -v esptool.py 2>/dev/null || command -v esptool 2>/de
 flash-esp32: BOARD := esp32_devkitc/esp32/procpu
 flash-esp32:
 	$(ESPTOOL) --chip esp32 --no-stub -p $(PORT) write_flash 0x1000 $(BUILD_DIR)/zephyr/zephyr.bin
+
+# Watch the ESP32's serial console (115200 8N1, Zephyr's console default --
+# confirmed 2026-08-05 against real hardware). Native on the host like
+# flash-esp32, same macOS/Linux-passthrough reasoning. Ctrl-A X to exit.
+# make console-esp32 PORT=/dev/tty.usbserial-XXXX
+console-esp32:
+	minicom -D $(PORT) -b 115200
 
 shell: image
 	docker run --rm -it -v $(APP_DIR):/app $(IMAGE) bash

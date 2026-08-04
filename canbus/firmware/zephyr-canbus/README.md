@@ -17,10 +17,16 @@ Pico (default board, per `boards/rpi_pico.overlay`):
 
 ESP32 DevKitC (per `boards/esp32_devkitc_esp32_procpu.overlay`):
 
-- LED (+ resistor) from **GPIO32** to GND.
+- LED: this board's **onboard LED on GPIO2** — confirmed by flashing real
+  hardware and watching it blink (2026-08-05), no wiring needed. Traded
+  away from the originally-planned external-LED-on-GPIO32 approach (which
+  deliberately avoided GPIO2 as a strapping pin) for the convenience of
+  zero wiring; works fine in practice since the onboard LED's loading is
+  light enough not to disturb boot-mode sensing.
 - Push-button from **GPIO33** to GND (internal pull-up enabled in software,
-  no external resistor needed). Pins chosen to avoid strapping pins and stay
-  clear of the default TWAI (CAN) pins for later CAN work.
+  no external resistor needed) — still needs breadboard wiring, chosen to
+  avoid strapping pins and stay clear of the default TWAI (CAN) pins for
+  later CAN work.
 
 ## Usage
 
@@ -32,6 +38,7 @@ make run-esp32-qemu      # ESP32 app: run in Espressif's QEMU fork (real Xtensa 
 make shell               # drop into the dev container (west/cmake available)
 make flash               # Pico: untested placeholder -- debug probe not chosen yet
 make flash-esp32 PORT=/dev/tty.usbserial-XXXX   # ESP32: real esptool flash, native (no Docker)
+make console-esp32 PORT=/dev/tty.usbserial-XXXX # ESP32: watch the serial console (minicom, native)
 make clean
 ```
 
@@ -52,13 +59,20 @@ and Linux-host USB passthrough — not yet exercised, see the macOS caveat in
 now, flashing via UF2 drag-and-drop (copy `build-rpi_pico/zephyr/zephyr.uf2`
 onto the Pico's BOOTSEL mass-storage drive) works with no extra setup.
 
-`make flash-esp32` (ESP32) runs `esptool.py` **natively on the host**, not
+`make flash-esp32` (ESP32) runs `esptool` **natively on the host**, not
 through Docker — unlike SWD debug probes, a USB-serial connection (the
 DevKit's onboard CP2102 chip) has no special passthrough problems on
 macOS, so there's no Linux-box detour needed here. Requires `esptool`
-installed on the host (`pip install esptool`) and the board's serial port
-(`ls /dev/tty.usbserial-*` on macOS once plugged in). Not yet exercised
-against real hardware.
+installed on the host (`pip install esptool` or, on Debian, `apt install
+esptool`) and the board's serial port (`ls /dev/tty.usbserial-*` on macOS,
+`/dev/ttyUSB*` on Linux, once plugged in). The Makefile auto-detects
+whether the binary is named `esptool` or `esptool.py` (varies by install
+method) and always passes `--no-stub` (Debian's `+dfsg` package strips the
+prebuilt stub-flasher blobs esptool normally uploads for faster flashing,
+so talking straight to the ROM bootloader is the one approach that works
+everywhere). Verified end to end against real hardware (2026-08-05): flash
+succeeds, and the serial console shows the app actually running
+(`led on/off (period=...)`).
 
 ## Running without hardware (`make run`)
 
