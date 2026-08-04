@@ -68,9 +68,9 @@ ENV ZEPHYR_BASE=/opt/zephyrproject/zephyr
 # Espressif's QEMU fork -- real Xtensa CPU + peripheral emulation for ESP32,
 # unlike native_sim (a host binary with GPIO faked). Prebuilt binary release,
 # not built from source (much faster, and doesn't need the full X11/SDL/GTK
-# build dependency chain). aarch64-linux-gnu matches this image's arch
-# (built on Apple Silicon); switch to the x86_64-linux-gnu asset if building
-# on an Intel host.
+# build dependency chain). Asset arch is picked from Docker's own
+# TARGETARCH build arg so this works unmodified on both Apple Silicon
+# (arm64) and Intel/amd64 hosts.
 # Own apt-get layer (not folded into the main one above) so touching QEMU
 # deps doesn't bust the cache on the expensive west update/sdk install
 # steps that come before it.
@@ -79,8 +79,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG QEMU_ESP_RELEASE=esp-develop-9.2.2-20260417
-RUN wget -qO /tmp/qemu-esp.tar.xz \
-        "https://github.com/espressif/qemu/releases/download/${QEMU_ESP_RELEASE}/qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz" \
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        amd64) QEMU_ESP_ARCH=x86_64-linux-gnu ;; \
+        arm64) QEMU_ESP_ARCH=aarch64-linux-gnu ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && wget -qO /tmp/qemu-esp.tar.xz \
+        "https://github.com/espressif/qemu/releases/download/${QEMU_ESP_RELEASE}/qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-${QEMU_ESP_ARCH}.tar.xz" \
     && mkdir -p /opt/espressif-qemu \
     && tar -xf /tmp/qemu-esp.tar.xz -C /opt/espressif-qemu --strip-components=1 \
     && rm /tmp/qemu-esp.tar.xz
