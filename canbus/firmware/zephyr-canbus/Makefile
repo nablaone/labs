@@ -48,10 +48,20 @@ flash: image
 # (unlike SWD probes) works fine straight from a native esptool install on
 # the Mac, no Docker/Linux-box USB-passthrough detour needed. Not run
 # through the container for that reason.
+# Binary name varies by install method: pip's esptool package provides both
+# `esptool` and `esptool.py`, but Debian's apt package only provides
+# `esptool` -- pick whichever exists.
+ESPTOOL := $(shell command -v esptool.py 2>/dev/null || command -v esptool 2>/dev/null || echo esptool.py)
+# --no-stub: Debian's esptool package is a +dfsg build that strips the
+# prebuilt stub-flasher blobs esptool normally uploads and runs on the chip
+# for faster flashing -- without them it dies with FileNotFoundError
+# (confirmed 2026-08-05 on this host's esptool 4.7.0+dfsg-0.1). --no-stub
+# talks directly to the ROM bootloader instead, slower but works
+# everywhere regardless of install method.
 # make flash-esp32 PORT=/dev/tty.usbserial-XXXX
 flash-esp32: BOARD := esp32_devkitc/esp32/procpu
 flash-esp32:
-	esptool.py --chip esp32 -p $(PORT) write_flash 0x1000 $(BUILD_DIR)/zephyr/zephyr.bin
+	$(ESPTOOL) --chip esp32 --no-stub -p $(PORT) write_flash 0x1000 $(BUILD_DIR)/zephyr/zephyr.bin
 
 shell: image
 	docker run --rm -it -v $(APP_DIR):/app $(IMAGE) bash
