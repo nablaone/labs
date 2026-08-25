@@ -6,16 +6,18 @@
 #include "esp_log.h"
 
 /*
- * LED on GPIO2 (onboard LED on this DevKitC-compatible board) and button on
- * GPIO33, matching the wiring worked out for the earlier Zephyr app -- see
- * ../../CLAUDE.md and boards/esp32_devkitc_esp32_procpu.overlay in
- * ../zephyr-canbus for the reasoning (GPIO2 is a strapping pin but its
- * onboard-LED loading doesn't disturb boot-mode sensing in practice;
- * GPIO33 avoids strapping pins and the default TWAI RX/TX pins for later
- * CAN work).
+ * LED on GPIO2 (onboard LED) and button on GPIO0 (onboard BOOT button) --
+ * both onboard, no breadboard wiring needed. Both are strapping pins
+ * (sampled at boot to select flash/boot mode), which is why the earlier
+ * Zephyr app avoided them in favor of an external button on GPIO33 -- but
+ * once the app is running, GPIO0 reads like any other input (it's only
+ * sampled at reset), and the onboard LED's light loading on GPIO2 doesn't
+ * disturb boot-mode sensing in practice (confirmed on real hardware). The
+ * board already has an external pull-up on GPIO0 for its BOOT button;
+ * gpio_pullup_en() below just reinforces it.
  */
 #define LED_GPIO    GPIO_NUM_2
-#define BUTTON_GPIO GPIO_NUM_33
+#define BUTTON_GPIO GPIO_NUM_0
 
 #define SLOW_BLINK_MS 1000
 #define FAST_BLINK_MS 100

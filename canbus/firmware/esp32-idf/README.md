@@ -8,15 +8,24 @@ image; no host IDF install needed for building.
 
 Current app (`main/main.c`): blinks the onboard LED, polling a button to
 switch between a slow (1000ms) and fast (100ms) blink rate while it's held
-down. Same behavior as the old Zephyr app, same wiring.
+down. Same behavior as the old Zephyr app; wiring changed to use the
+board's onboard BOOT button instead of an external one (see below).
 
 ## Wiring
 
-- LED: onboard LED on **GPIO2** — no wiring needed.
-- Push-button from **GPIO33** to GND (internal pull-up enabled in software,
-  no external resistor needed) — needs breadboard wiring. Chosen to avoid
-  strapping pins and stay clear of the default TWAI (CAN) pins for later
-  CAN work.
+Both onboard, no breadboard wiring needed:
+
+- LED: onboard LED on **GPIO2**.
+- Button: onboard **BOOT** button, wired to **GPIO0**.
+
+Both are strapping pins (sampled at boot to select flash/boot mode) — the
+earlier Zephyr app avoided them in favor of an external button on GPIO33,
+but once the app is running, GPIO0 reads like any other input (it's only
+sampled at reset), and the onboard LED's light loading on GPIO2 doesn't
+disturb boot-mode sensing in practice. GPIO0 already has an external
+pull-up on the board for the BOOT button. If CAN work later needs GPIO0/2
+for TWAI or anything else strapping-sensitive, switch back to an external
+button (e.g. the old GPIO33) at that point.
 
 ## Usage
 
