@@ -3,7 +3,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/printk.h>
 
-#define SLOW_BLINK_MS 500
+#define SLOW_BLINK_MS 1000
 #define FAST_BLINK_MS 100
 #define POLL_MS 10
 

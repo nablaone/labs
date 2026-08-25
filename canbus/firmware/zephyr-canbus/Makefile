@@ -58,16 +58,23 @@ ESPTOOL := $(shell command -v esptool.py 2>/dev/null || command -v esptool 2>/de
 # (confirmed 2026-08-05 on this host's esptool 4.7.0+dfsg-0.1). --no-stub
 # talks directly to the ROM bootloader instead, slower but works
 # everywhere regardless of install method.
-# make flash-esp32 PORT=/dev/tty.usbserial-XXXX
+# PORT auto-detects the DevKit's CP2102 USB-serial device. Covers both
+# macOS naming (cu.usbserial-XXXX, or cu.SLAB_USBtoUART* if the Silicon
+# Labs driver is installed instead of the CDC-ACM one) and Linux naming
+# (ttyUSB*). Device path renumbers across reboots/USB slots but there's
+# normally only one plugged in, so globbing beats hardcoding a path.
+# Override with PORT=/dev/whatever if you ever have more than one attached.
+PORT ?= $(shell ls /dev/cu.usbserial-* /dev/cu.SLAB_USBtoUART* /dev/ttyUSB* 2>/dev/null | head -1)
 flash-esp32: BOARD := esp32_devkitc/esp32/procpu
 flash-esp32:
+	$(if $(PORT),,$(error No PORT found -- is the ESP32 plugged in? Or pass PORT=/dev/tty.usbserial-XXXX))
 	$(ESPTOOL) --chip esp32 --no-stub -p $(PORT) write_flash 0x1000 $(BUILD_DIR)/zephyr/zephyr.bin
 
 # Watch the ESP32's serial console (115200 8N1, Zephyr's console default --
 # confirmed 2026-08-05 against real hardware). Native on the host like
 # flash-esp32, same macOS/Linux-passthrough reasoning. Ctrl-A X to exit.
-# make console-esp32 PORT=/dev/tty.usbserial-XXXX
 console-esp32:
+	$(if $(PORT),,$(error No PORT found -- is the ESP32 plugged in? Or pass PORT=/dev/tty.usbserial-XXXX))
 	minicom -D $(PORT) -b 115200
 
 shell: image
