@@ -1,8 +1,29 @@
 # canbus
 
-CAN bus experimentation lab: a simple LED/button firmware app on ESP32,
-exercised over a physical CAN bus, with the laptop able to join the bus to
-sniff and inject traffic.
+ESP32/ESP-IDF prototyping lab for a much bigger real project: a
+**distributed control system for a rideable 7¼" gauge electric
+locomotive, plus a modular trackside layout** — see
+[docs/project-charter.md](docs/project-charter.md), the keystone design
+doc (decisions, system shape, safety posture). This repo's day-to-day work
+— a simple LED/button/CLI firmware app on one ESP32 DevKit, exercised over
+a physical CAN bus, with the laptop able to join the bus to sniff and
+inject traffic — is the learning/bring-up ground for that project, not a
+separate thing. `docs/` carries the full design record (bus choice,
+message spec, power/harness, wireless, diagnostics, node pattern, etc.);
+this file stays about the hands-on state of *this* board and lab.
+
+**Scope clarified (2026-08-26):** the charter (drafted in a separate
+conversation, merged into `docs/` here) makes explicit what this lab was
+implicitly building toward. Two things it settles that affect this repo
+directly:
+- **Platform**: ESP32 + ESP-IDF only — already where this lab had
+  independently landed (see the 2026-08-25 note below), now confirmed as
+  the deliberate project-wide decision, not just this lab's simplification.
+- **Chip variant for *new* nodes**: ESP32-S3/C3/C6 (native USB/JTAG,
+  BLE5, lower cost per role) — the WROOM-32 in hand is marked NRND by
+  Espressif and is for **existing prototypes only** (i.e. this lab's board
+  stays as-is; don't buy more WROOM-32 for anything new). No S3/C3/C6
+  boards on hand yet — open question below.
 
 **Direction change (2026-08-25):** narrowed from the original two-board
 (Pico + ESP32), two-RTOS (FreeRTOS + Zephyr) plan down to **ESP32 only,
@@ -36,10 +57,16 @@ unnecessary work for this lab's goals.
 FreeRTOS (dual-core SMP) is the default RTOS baked into ESP-IDF, built via
 `idf.py` (CLI-native, no code generator). TWAI driver is built in.
 
-The app itself stays simple: blink an LED, read a button, and (next) use
-those to drive/react to CAN frames — the point is exercising the CAN stack
-and dev loop, not the app logic. See
-[firmware/esp32-idf/README.md](firmware/esp32-idf/README.md).
+The app itself stays simple: blink an LED, read a button, run a CLI, and
+(next) use those to drive/react to CAN frames — the point is exercising
+the CAN stack, the FreeRTOS concurrency model, and the dev loop, not the
+app logic. Its mutex-protected shared counter + multi-task shape is a
+hands-on rehearsal of the sync-primitive patterns in
+[docs/esp-idf-architecture.md](docs/esp-idf-architecture.md) (queues for
+CAN-RX hand-off, a mutex for shared "current state," atomics for flags) —
+the same shape a real motor/controller/panel node will use. See
+[firmware/esp32-idf/README.md](firmware/esp32-idf/README.md) and the CAN
+bring-up plan, [docs/can-bus-bringup-plan.md](docs/can-bus-bringup-plan.md).
 
 *Earlier plan*: this was going to be one of four RTOS/board combinations
 (FreeRTOS/Zephyr × Pico/ESP32), with a single Zephyr app shared across both
@@ -98,8 +125,10 @@ Mac can't join the bus natively.
 
 - `notebook/` — dated lab notebook entries (chronological log of what was
   tried). See [notebook/README.md](notebook/README.md).
-- `docs/` — reference material as markdown: datasheet notes, scrubbed web
-  excerpts, protocol references, cited. See [docs/README.md](docs/README.md).
+- `docs/` — reference material as markdown: the project-wide design
+  record (charter, bus/message/wireless/power/diagnostics decisions —
+  start at [docs/project-charter.md](docs/project-charter.md)) plus this
+  board's own hands-on lab notes. See [docs/README.md](docs/README.md).
 - `firmware/esp32-idf/` — the active app: plain ESP-IDF on the ESP32
   DevKit. See [firmware/esp32-idf/README.md](firmware/esp32-idf/README.md).
 - `firmware/zephyr-canbus/` — earlier Zephyr app (Pico + ESP32), kept as
@@ -123,3 +152,10 @@ Mac can't join the bus natively.
   a deliberate decision, just what's plugged in. No longer needed for
   flashing/debugging now that Pico/SWD is out of scope — purely a CAN
   gateway question now.
+- No ESP32-S3/C3/C6 hardware on hand yet — the charter
+  ([docs/project-charter.md](docs/project-charter.md)) calls for them on
+  every *new* node (native USB/JTAG per
+  [docs/diagnostics.md](docs/diagnostics.md), BLE5, lower cost by role);
+  this lab's WROOM-32 stays as the existing-prototype exception. Not
+  blocking the current TWAI bring-up (WROOM-32 is fine for that), but
+  worth ordering before the next real node (motor/controller/panel) starts.

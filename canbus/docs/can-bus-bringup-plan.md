@@ -8,6 +8,13 @@ CAN frames with the Linux box's CANable2 (`can0`, already configured by
 tried. Once it's underway, log actual results/deviations in
 `../notebook/`.
 
+This is pure connectivity bring-up on the one WROOM-32 board in hand — not
+yet a real node per [project-charter.md](project-charter.md)'s system (that
+calls for ESP32-S3/C3/C6, WROOM-32 being NRND for new nodes). The message
+IDs below are scratch/test values, not registrations in
+[can-message-spec.md](can-message-spec.md) — see the note in "What to send
+/ receive."
+
 ## Pin assignment
 
 | ESP32 pin | Function | SN65HVD230 pin |
@@ -150,6 +157,15 @@ Once basic bidirectional traffic is confirmed, next steps (not part of
 this bring-up): a real CLI command for sending arbitrary frames, and
 maybe wiring the received CAN ID/payload into the counter mechanic more
 specifically (e.g. different IDs bump the counter by different amounts).
+
+**On the IDs `0x123`/`0x321`:** deliberately picked from the gap
+[can-message-spec.md](can-message-spec.md) leaves unallocated
+(`0x100`–`0x6FF`, everything between the defined classes and the
+`0x700`–`0x7FF` diagnostics band) — this is connectivity bring-up, not a
+real message, so it shouldn't borrow meaning (or collide with) an actual
+class like control or status/telemetry. When real motor/controller/panel
+node messages get defined, their IDs get chosen from the proper class and
+registered in that spec's allocation table, not carried over from here.
 
 ## Linux box commands
 
