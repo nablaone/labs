@@ -25,6 +25,18 @@ ESP32's two cores, so the counter is guarded by a FreeRTOS mutex
 (`SemaphoreHandle_t`) rather than relying on plain reads/writes being
 atomic.
 
+A fifth task, `console_task`, waits for Enter on the serial console; once
+seen, it silences logging (`esp_log_level_set("*", ESP_LOG_NONE)`) and runs
+an `esp_console`/linenoise REPL until the `exit` command is typed, at which
+point logging resumes and `console_task` goes back to waiting for the next
+Enter. Commands:
+
+- **`help`** — list all commands (built into `esp_console`).
+- **`version`** — firmware + ESP-IDF version.
+- **`counter`** — current excitement counter value.
+- **`rate N`** — set `heartbeat_task`'s period to `N*100ms`.
+- **`exit`** — leave CLI mode, resume logging.
+
 ## Wiring
 
 Both onboard, no breadboard wiring needed:
@@ -67,4 +79,13 @@ the exact offsets/flags rather than hardcoding them.
 
 `make monitor` uses `minicom` directly instead of `idf.py monitor` so it
 doesn't need a host IDF install either — same 115200 8N1 as ESP-IDF's
-default console.
+default console. It writes a minimal per-user minicom profile at
+`~/.minirc.canbus-esp32-idf` the first time it runs (only if that file
+doesn't already exist) that disables hardware and software flow control —
+minicom's defaults there are a common cause of "I don't see what I type" on
+ESP32 boards, since the board doesn't wire real UART flow control at all
+and minicom just withholds display waiting on it. Ctrl-A X to exit.
+
+Press Enter on the console at any time to switch into CLI mode (logging
+pauses, `canbus>` prompt appears); type `exit` to leave it and resume
+logging. See the CLI command list above.

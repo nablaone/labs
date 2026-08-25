@@ -40,9 +40,17 @@ flash: build
 # Watch the ESP32's serial console (115200 8N1, ESP-IDF's default). Native
 # on the host like flash, same macOS/Linux-passthrough reasoning. Ctrl-A X
 # to exit.
+# minicom's default hardware/software flow control is a well-known cause of
+# "I don't see what I type" on ESP32 boards -- the board doesn't wire real
+# UART flow control at all, so minicom just withholds display waiting on
+# it. Fixed by generating a minimal per-user minicom profile
+# (~/.minirc.canbus-esp32-idf) with both off, idempotent (only written if
+# missing) rather than touching the user's default minirc.dfl.
+MINIRC := $(HOME)/.minirc.canbus-esp32-idf
 monitor:
 	$(if $(PORT),,$(error No PORT found -- is the ESP32 plugged in? Or pass PORT=/dev/tty.usbserial-XXXX))
-	minicom -D $(PORT) -b 115200
+	@test -f $(MINIRC) || printf 'pu rtscts           No\npu xonxoff          No\n' > $(MINIRC)
+	minicom -D $(PORT) -b 115200 canbus-esp32-idf
 
 shell: image
 	docker run --rm -it -v $(APP_DIR):/app -w /app $(IMAGE) bash
