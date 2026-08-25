@@ -6,10 +6,24 @@ ESP32-only now: no Zephyr, no Pico, no shared board-agnostic abstraction to
 maintain. Everything runs through Docker via the official `espressif/idf`
 image; no host IDF install needed for building.
 
-Current app (`main/main.c`): blinks the onboard LED, polling a button to
-switch between a slow (1000ms) and fast (100ms) blink rate while it's held
-down. Same behavior as the old Zephyr app; wiring changed to use the
-board's onboard BOOT button instead of an external one (see below).
+Current app (`main/main.c`) is a FreeRTOS threading/shared-memory demo, not
+just a blink loop — it's here to exercise the concurrency model the CAN
+work will eventually run on top of, using a 32-bit "excitement counter" as
+a stand-in for later CAN-driven events. Four tasks, one mutex-protected
+`uint32_t`:
+
+- **`led_task`** — every 100ms, reads the counter; toggles the LED if it
+  changed since the last read.
+- **`heartbeat_task`** — increments the counter every 1s on its own.
+- **`button_task`** — polls the button every 100ms; increments the counter
+  on every poll where it reads pressed (holding it down keeps
+  incrementing, not just a single bump per press).
+- **`app_main`** (the main task) — logs the counter's value every 10s.
+
+All three worker tasks (and `app_main`) can run concurrently across the
+ESP32's two cores, so the counter is guarded by a FreeRTOS mutex
+(`SemaphoreHandle_t`) rather than relying on plain reads/writes being
+atomic.
 
 ## Wiring
 
