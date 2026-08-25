@@ -111,10 +111,10 @@ Mac can't join the bus natively.
 
 ## Open questions
 
-- ESP32 TWAI CAN pin wiring (which GPIOs to use) not yet decided. GPIO33
-  (button) was chosen to stay clear of the common TWAI default pins; LED
-  is on GPIO2 (this board's onboard LED, confirmed 2026-08-05). Same
-  wiring carried over to `firmware/esp32-idf/`, see
+- ESP32 TWAI CAN pin wiring: planned (GPIO21 TX / GPIO22 RX), not yet
+  wired or implemented — see
+  [docs/can-bus-bringup-plan.md](docs/can-bus-bringup-plan.md). LED is on
+  GPIO2, button (BOOT) on GPIO0, see
   [firmware/esp32-idf/main/main.c](firmware/esp32-idf/main/main.c).
 - Which physical machine becomes the permanent CAN-gateway host (CANable
   bridged to SocketCAN via `canbus/scripts/setup-socketcan.sh`) — this
