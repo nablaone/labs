@@ -76,10 +76,13 @@ errors, not a clean "wrong speed" report). Use ESP-IDF's
 Bring the TWAI stack up in two stages rather than wiring everything at
 once and debugging blind:
 
-### Stage A — transceiver self-test (`TWAI_MODE_NO_ACK`)
+### Stage A — transceiver self-test (`TWAI_MODE_NO_ACK`) — CONFIRMED PASSING 2026-08-26
 
 Answers "is the transceiver actually connected and wired correctly?"
-*without* needing the Linux box or bus connected at all.
+*without* needing the Linux box or bus connected at all. Implemented in
+`firmware/esp32-idf/main/main.c` (`can_selftest()`, exposed as the
+`can loop`/`can xcvr` CLI commands), confirmed against real hardware: the
+Waveshare 3945 (SN65HVD230) transceiver on GPIO21/22 (D21/D22).
 
 A CAN transceiver electrically reflects whatever it transmits back onto
 its own RXD pin (that's inherent to the differential-bus physical layer,
@@ -97,28 +100,64 @@ twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
 twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 twai_driver_install(&g_config, &t_config, &f_config);
 twai_start();
-// transmit a frame, then twai_receive() with a short timeout --
-// getting the same frame back confirms TX pin, RX pin, and the
-// transceiver chip are all wired and working.
+
+twai_message_t tx_msg = {
+    .self = 1,  // REQUIRED -- see gotcha below
+    .identifier = 0x100,
+    .data_length_code = 1,
+    .data = { 0xA5 },
+};
+twai_transmit(&tx_msg, pdMS_TO_TICKS(100));
+// twai_receive() with a short timeout -- getting the same frame back
+// confirms TX pin, RX pin, and the transceiver chip are all wired and
+// working.
 ```
+
+**Gotcha that cost real debugging time:** `TWAI_MODE_NO_ACK` alone does
+*not* cause self-reception. `twai_transmit()` reports success (frame
+"sent," zero errors) regardless of whether it actually reached the
+transceiver correctly — that status is about the controller accepting the
+frame, not about physical loopback. Without `.self = 1` set on the
+message, the frame is never queued for the local `twai_receive()` to see,
+*no matter how good the wiring is* — confirmed by the fact that even a
+bare jumper wire from GPIO21 straight to GPIO22 (bypassing the
+transceiver entirely) still failed identically until this flag was added.
+Every failure before that fix looked exactly like a hardware problem
+(`msgs_to_tx` draining to 0, zero errors on every counter) and wasn't
+one. Reference: ESP-IDF's own
+`examples/peripherals/twai/twai_self_test`, which sets this flag.
 
 - **Pass** (frame loops back cleanly): transceiver + GPIO wiring is good —
   move to Stage B.
 - **Fail** (`twai_receive()` times out, or `twai_get_status_info()` shows
-  bus/bit errors): wiring problem on the ESP32 side — check TX/RX aren't
-  swapped, transceiver VCC/GND, and that CANH/CANL aren't shorted or
-  floating in a way that corrupts the loopback signal.
+  bus/bit errors) *with `.self = 1` already set*: now a real wiring
+  problem — check TX/RX aren't swapped, transceiver VCC/GND, and that
+  CANH/CANL aren't shorted or floating in a way that corrupts the
+  loopback signal.
 
 This isolates "is the ESP32 half of this working" from "is there a live
 peer" — worth doing before ever touching the Linux box, since it rules out
 a whole class of wiring mistakes on its own.
 
-### Stage B — real bus, `TWAI_MODE_NORMAL`
+### Stage B — real bus, `TWAI_MODE_NORMAL` — CONFIRMED WORKING 2026-08-26
+
+Implemented as `can send`/`can sniff` CLI commands
+(`firmware/esp32-idf/main/main.c`), with `cantool.py` (same directory) as
+the Mac-side counterpart — same `<id_hex>#<data_hex>` frame syntax on
+both, so a frame copy-pastes cleanly between them. The driver now runs in
+`TWAI_MODE_NORMAL` by default (switching to `TWAI_MODE_NO_ACK` only
+temporarily for `can loop`/`can xcvr`, then back — see `can_reinit()`).
+
+**Confirmed both directions against a CANable2 on the Mac** (not the
+Linux box — see the open question below): `can send 123#DEADBEEF` on the
+ESP32 → received via `cantool.py sniff` on the Mac; `cantool.py send
+321#CAFEBABE` on the Mac → received via `can sniff` on the ESP32. Real
+bus, real ACKs, both ways.
 
 With the CANH/CANL run made to the CANable2 and both ends terminated,
 switch to normal mode and bring `can0` up on the Linux box (`ip link set
 can0 up type can bitrate 500000` — already handled automatically by
-`setup-socketcan.sh` on hotplug).
+`setup-socketcan.sh` on hotplug) if using that path instead of the Mac.
 
 **Detecting a live peer doesn't require the other side to be actively
 *sending* anything.** ACK is a hardware-level thing: any CAN controller
@@ -137,26 +176,19 @@ et al.) ever sees the frame. So:
 
 ## What to send / receive
 
-Simple and easy to eyeball on both ends for the first test:
+**Implemented as ad hoc `can send`/`can sniff` CLI commands** (and
+`cantool.py` on the Mac side) rather than auto-sending the counter on
+every heartbeat tick — simpler to get Stage B working first, and ad hoc
+send/sniff is more useful for bring-up than a fixed periodic payload
+anyway. Confirmed both directions with arbitrary test frames (see Stage B
+above: `123#DEADBEEF` ESP32→Mac, `321#CAFEBABE` Mac→ESP32).
 
-- **ESP32 → Linux**: send CAN ID `0x123`, single data byte = the current
-  low byte of the app's existing "excitement counter"
-  (`firmware/esp32-idf/main/main.c`) — ties the CAN work directly into the
-  counter/threading demo already built, and gives a payload that visibly
-  changes frame-to-frame so it's obvious real traffic is flowing, not a
-  stuck value. Send once per `heartbeat_task` tick (every 1s by default,
-  adjustable via the existing `rate N` CLI command) to start; a `can send
-  <id> <hex>` CLI command for ad hoc sends can come later.
-- **Linux → ESP32**: `cansend can0 321#DEADBEEF` (arbitrary distinct ID and
-  payload, easy to recognize) — on receipt, the ESP32 logs the frame and
-  bumps the excitement counter (an "interesting operation," per the
-  counter's whole reason for existing), same as the button/heartbeat
-  sources already do.
-
-Once basic bidirectional traffic is confirmed, next steps (not part of
-this bring-up): a real CLI command for sending arbitrary frames, and
-maybe wiring the received CAN ID/payload into the counter mechanic more
-specifically (e.g. different IDs bump the counter by different amounts).
+**Not yet done** (still a reasonable next step, not part of this
+bring-up): tying CAN traffic into the excitement-counter mechanic
+already built — e.g. auto-sending the counter's low byte on every
+`heartbeat_task` tick, and/or bumping the counter on receipt of any CAN
+frame (an "interesting operation," per the counter's whole reason for
+existing), same as the button/heartbeat sources already do.
 
 **On the IDs `0x123`/`0x321`:** deliberately picked from the gap
 [can-message-spec.md](can-message-spec.md) leaves unallocated
@@ -195,31 +227,42 @@ cangen can0 -g 100 -I 123 -L 1      # generate a frame every 100ms, ID 0x123, 1 
 Linux box if it isn't already (`apt install can-utils` on Debian/Ubuntu) —
 not yet confirmed present, check before relying on it.
 
-## Step-by-step sequence
+## Step-by-step sequence — DONE 2026-08-26, all in one build
 
-1. Wire the SN65HVD230 to the ESP32 per the pin table above — **no bus
-   connection yet**.
-2. Flash a Stage A (`TWAI_MODE_NO_ACK`) build, confirm self-test loopback
-   passes.
-3. Confirm/install `can-utils` on the Linux box; confirm `can0` is up at
-   500 kbit/s (`make setup-socketcan` if not already done).
-4. Wire CANH/CANL between the ESP32 transceiver and the CANable2, with
-   termination at both ends.
-5. Flash a Stage B (`TWAI_MODE_NORMAL`) build sending the counter-byte
-   frame on `0x123` every heartbeat tick.
-6. `candump can0` on the Linux box — confirm frames arrive with the
-   expected ID and a changing payload.
-7. `cansend can0 321#DEADBEEF` from the Linux box — confirm the ESP32
-   logs receipt and the excitement counter bumps (`counter` CLI command,
-   or watch the log line).
-8. Note actual results (bitrate/wiring issues, error counts, anything
-   that didn't match this plan) in a dated `../notebook/` entry.
+Turned out not to need separate Stage A/B builds — `can_reinit()` switches
+the driver mode at runtime, so one build does both:
+
+1. ~~Wire the SN65HVD230 to the ESP32~~ — done (D21/D22, see pin table).
+2. ~~Confirm self-test loopback passes~~ — done (`can xcvr`; see the
+   `.self = 1` gotcha above and [../notebook/2026-08-26.md](../notebook/2026-08-26.md)
+   for the debugging detour it caused).
+3. ~~Wire CANH/CANL to a CAN peer, confirm real traffic~~ — done, against
+   a CANable2 on the Mac rather than the Linux box's `can0` (open question
+   below): `can send`/`can sniff` on the ESP32, `cantool.py send`/
+   `cantool.py sniff` on the Mac, confirmed both directions.
+4. Note actual results in a dated `../notebook/` entry — done, see
+   [../notebook/2026-08-26.md](../notebook/2026-08-26.md).
+
+**Not yet done**: the equivalent run against the Linux box's `can0` (this
+plan's original target) — worth doing at some point to confirm that path
+too, especially since `can-utils` presence there is still unconfirmed
+(see below).
 
 ## Open questions
 
-- Exact SN65HVD230 breakout in hand — confirm its `Rs`/slew-rate pin
-  wiring and whether it has a populated termination jumper, both vary by
-  vendor.
+- ~~Exact SN65HVD230 breakout in hand~~ — resolved: Waveshare 3945.
+  [Schematic](https://files.waveshare.com/upload/c/c5/SN65HVD230-CAN-Board-Schematic.pdf)
+  confirms a **fixed, always-on 120Ω** across CANH/CANL (R2, not a
+  jumper) and `Rs` biased through a 10KΩ resistor to GND (slope-control
+  mode, not standby) — no jumpers to set on this board at all.
+- **Deviation from this plan**: Stage A bring-up/debugging actually used a
+  CANable2 plugged directly into the Mac (via `python-can`'s `slcan`
+  backend, since it's running slcan/CDC-ACM firmware — see
+  [../CLAUDE.md](../CLAUDE.md)'s slcan fallback), not the Linux box's
+  `can0`. Handy for a quick independent listener during bring-up debugging
+  (see the 2026-08-26 notebook entry); Stage B as planned still targets
+  the Linux box's `can0` — revisit whether that's still the right call
+  once Stage B actually starts, given the Mac path already works.
 - Physical distance/routing between the ESP32 (wherever it's flashed from
   — the Mac's USB) and the Linux box's CANable2 — affects how much the
   "keep it short for bring-up" wiring advice above matters in practice.

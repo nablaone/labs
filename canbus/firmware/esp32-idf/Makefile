@@ -3,7 +3,7 @@ IDF_TARGET ?= esp32
 APP_DIR := $(CURDIR)
 BUILD_DIR := build
 
-.PHONY: image build monitor shell flash clean
+.PHONY: image build monitor shell flash clean can-sniff can-send
 
 image:
 	docker build -t $(IMAGE) .
@@ -54,6 +54,32 @@ monitor:
 
 shell: image
 	docker run --rm -it -v $(APP_DIR):/app -w /app $(IMAGE) bash
+
+# Mac-side CAN sniff/send via cantool.py, talking directly to a CANable-
+# style dongle's slcan serial port (python-can) -- no SocketCAN needed, so
+# this works natively on macOS. Linux/SocketCAN skipped on purpose: that
+# path already has the real thing (candump/cansend), see
+# ../../scripts/setup-socketcan.sh. Same <id_hex>#<data_hex> frame syntax
+# as the ESP32's own "can sniff"/"can send" CLI commands.
+# Own venv (not the host Python) since macOS's Homebrew Python refuses
+# unmanaged `pip install` (PEP 668) -- created once, reused after.
+CANTOOL := $(CURDIR)/cantool.py
+CANVENV := $(CURDIR)/.cantool-venv
+CANPY := $(CANVENV)/bin/python3
+
+$(CANPY):
+	python3 -m venv $(CANVENV)
+	$(CANPY) -m pip install -q python-can pyserial
+
+# make can-sniff SECONDS=20
+SECONDS ?= 10
+can-sniff: $(CANPY)
+	$(CANPY) $(CANTOOL) sniff $(SECONDS)
+
+# make can-send FRAME=123#DEADBEEF
+can-send: $(CANPY)
+	$(if $(FRAME),,$(error Pass FRAME=<id_hex>#<data_hex>, e.g. make can-send FRAME=123#DEADBEEF))
+	$(CANPY) $(CANTOOL) send $(FRAME)
 
 clean:
 	rm -rf $(BUILD_DIR) sdkconfig sdkconfig.old

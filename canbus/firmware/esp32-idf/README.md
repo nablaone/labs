@@ -35,11 +35,46 @@ Enter. Commands:
 - **`version`** — firmware + ESP-IDF version.
 - **`counter`** — current excitement counter value.
 - **`rate N`** — set `heartbeat_task`'s period to `N*100ms`.
+- **`can loop`** — self-test with D21 jumpered directly to D22 (no
+  transceiver) — isolates the TWAI peripheral/firmware from the hardware.
+- **`can xcvr`** — the same self-test, but with the SN65HVD230 wired
+  normally — confirms the transceiver + its wiring.
+- **`can sniff [seconds]`** — print received frames as `<id_hex>#<data_hex>`
+  for `seconds` (default 10), then return.
+- **`can send <id_hex>#<data_hex>`** — transmit one frame, e.g.
+  `can send 123#DEADBEEF`.
 - **`exit`** — leave CLI mode, resume logging.
+
+The driver comes up in `TWAI_MODE_NORMAL` at boot (GPIO21/22, 500 kbit/s)
+after running the self-test once automatically (temporarily switching to
+`TWAI_MODE_NO_ACK` and back — see `can_reinit()`/`can_run_selftest()` in
+`main/main.c`), logging PASS/FAIL. `can loop`/`can xcvr` do the same
+temporary switch on demand. See
+[../../docs/can-bus-bringup-plan.md](../../docs/can-bus-bringup-plan.md)
+for the reasoning and Stage A/B plan.
+
+**Confirmed on real hardware, 2026-08-26**: Stage A (SN65HVD230
+transceiver, D21/D22 wiring, `can xcvr`) and Stage B (`can send`/
+`can sniff` against a CANable2 on the actual bus, both directions) both
+pass. Self-test needs a frame with the self-reception flag set
+(`.self = 1`) to actually queue a received frame under
+`TWAI_MODE_NO_ACK` — easy to miss (cost real debugging time, see
+[../../notebook/2026-08-26.md](../../notebook/2026-08-26.md)), ESP-IDF's
+own `examples/peripherals/twai/twai_self_test` is the reference.
+
+**`cantool.py`** (same directory) is the Mac-side counterpart —
+sniffs/sends on a CANable-style dongle over its slcan serial port
+directly (no SocketCAN needed on macOS), using the same
+`<id_hex>#<data_hex>` frame syntax as the CLI commands above, so a frame
+copy-pastes cleanly between the two. `make can-sniff [SECONDS=10]` /
+`make can-send FRAME=123#DEADBEEF` (own venv, auto-created — see
+Usage below). Linux/SocketCAN intentionally not covered here; that
+already has the real thing (`candump`/`cansend`), see
+[../../scripts/setup-socketcan.sh](../../scripts/setup-socketcan.sh).
 
 ## Wiring
 
-Both onboard, no breadboard wiring needed:
+LED and button are onboard, no breadboard wiring needed:
 
 - LED: onboard LED on **GPIO2**.
 - Button: onboard **BOOT** button, wired to **GPIO0**.
@@ -49,9 +84,12 @@ earlier Zephyr app avoided them in favor of an external button on GPIO33,
 but once the app is running, GPIO0 reads like any other input (it's only
 sampled at reset), and the onboard LED's light loading on GPIO2 doesn't
 disturb boot-mode sensing in practice. GPIO0 already has an external
-pull-up on the board for the BOOT button. If CAN work later needs GPIO0/2
-for TWAI or anything else strapping-sensitive, switch back to an external
-button (e.g. the old GPIO33) at that point.
+pull-up on the board for the BOOT button.
+
+CAN needs the external SN65HVD230 transceiver wired in — GPIO21 (TX) /
+GPIO22 (RX), silkscreened **D21**/**D22** on this DevKit V1-style board.
+Full wiring table, termination, and bring-up sequence:
+[../../docs/can-bus-bringup-plan.md](../../docs/can-bus-bringup-plan.md).
 
 ## Usage
 
@@ -60,8 +98,16 @@ make build                        # build via Docker, IDF_TARGET defaults to esp
 make flash PORT=/dev/tty.usbserial-XXXX   # real esptool flash, native (no Docker)
 make monitor PORT=/dev/tty.usbserial-XXXX # watch the serial console (minicom, native)
 make shell                        # drop into the dev container (idf.py available)
+make can-sniff [SECONDS=10]       # Mac-side sniff via cantool.py (own venv, auto-created)
+make can-send FRAME=123#DEADBEEF  # Mac-side send via cantool.py
 make clean
 ```
+
+`make can-sniff`/`make can-send` create `.cantool-venv/` on first use
+(macOS's Homebrew Python refuses unmanaged `pip install`, PEP 668) and
+install `python-can`/`pyserial` into it — nothing touches the host Python.
+Auto-detects a `/dev/cu.usbmodem*` dongle; override with `CAN_PORT=` if
+more than one is attached.
 
 First `make build` triggers the Docker image pull (the official
 `espressif/idf` image — toolchain + IDF baked in, multi-GB). Later builds
