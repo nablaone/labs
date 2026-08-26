@@ -71,10 +71,8 @@ $(CANPY):
 	python3 -m venv $(CANVENV)
 	$(CANPY) -m pip install -q python-can pyserial
 
-# make can-sniff SECONDS=20
-SECONDS ?= 10
 can-sniff: $(CANPY)
-	$(CANPY) $(CANTOOL) sniff $(SECONDS)
+	$(CANPY) $(CANTOOL) sniff
 
 # make can-send FRAME=123#DEADBEEF
 can-send: $(CANPY)

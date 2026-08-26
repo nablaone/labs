@@ -13,7 +13,7 @@ Same <id_hex>#<data_hex> frame syntax as the esp32-idf app's "can sniff"/
 between the two.
 
 Usage:
-    cantool.py sniff [SECONDS]           # print received frames for SECONDS (default 10)
+    cantool.py sniff                     # print received frames until Ctrl-C
     cantool.py send <id_hex>#<data_hex>  # e.g. cantool.py send 123#DEADBEEF
 
 Port auto-detected (first /dev/cu.usbmodem*); override with the CAN_PORT
@@ -23,7 +23,6 @@ match the ESP32 side and scripts/setup-socketcan.sh.
 import glob
 import os
 import sys
-import time
 
 import can
 
@@ -54,19 +53,23 @@ def parse_frame(frame_str):
     return int(id_str, 16), bytes.fromhex(data_str)
 
 
-def cmd_sniff(seconds):
-    bus = open_bus()
-    print(f"Listening on {bus.channel_info} for {seconds}s (Ctrl-C to stop early)...")
-    end = time.time() + seconds
+def cmd_sniff():
+    bus = None
     try:
-        while time.time() < end:
+        # open_bus() includes slcan's own brief post-open settle delay --
+        # a Ctrl-C landing during that (not just the receive loop below)
+        # should still exit cleanly, so it's inside this try too.
+        bus = open_bus()
+        print(f"Listening on {bus.channel_info} -- Ctrl-C to stop...")
+        while True:
             msg = bus.recv(timeout=0.5)
             if msg is not None:
                 print(f"{msg.arbitration_id:03X}#{msg.data.hex().upper()}")
     except KeyboardInterrupt:
-        pass
+        print()
     finally:
-        bus.shutdown()
+        if bus is not None:
+            bus.shutdown()
 
 
 def cmd_send(frame_str):
@@ -86,8 +89,7 @@ def main():
 
     cmd = sys.argv[1]
     if cmd == "sniff":
-        seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 10
-        cmd_sniff(seconds)
+        cmd_sniff()
     elif cmd == "send":
         if len(sys.argv) < 3:
             sys.exit("usage: cantool.py send <id_hex>#<data_hex>")

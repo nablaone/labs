@@ -39,8 +39,8 @@ Enter. Commands:
   transceiver) — isolates the TWAI peripheral/firmware from the hardware.
 - **`can xcvr`** — the same self-test, but with the SN65HVD230 wired
   normally — confirms the transceiver + its wiring.
-- **`can sniff [seconds]`** — print received frames as `<id_hex>#<data_hex>`
-  for `seconds` (default 10), then return.
+- **`can sniff`** — print received frames as `<id_hex>#<data_hex>` until
+  Enter is pressed.
 - **`can send <id_hex>#<data_hex>`** — transmit one frame, e.g.
   `can send 123#DEADBEEF`.
 - **`exit`** — leave CLI mode, resume logging.
@@ -66,7 +66,7 @@ own `examples/peripherals/twai/twai_self_test` is the reference.
 sniffs/sends on a CANable-style dongle over its slcan serial port
 directly (no SocketCAN needed on macOS), using the same
 `<id_hex>#<data_hex>` frame syntax as the CLI commands above, so a frame
-copy-pastes cleanly between the two. `make can-sniff [SECONDS=10]` /
+copy-pastes cleanly between the two. `make can-sniff` (Ctrl-C to stop) /
 `make can-send FRAME=123#DEADBEEF` (own venv, auto-created — see
 Usage below). Linux/SocketCAN intentionally not covered here; that
 already has the real thing (`candump`/`cansend`), see
@@ -98,7 +98,7 @@ make build                        # build via Docker, IDF_TARGET defaults to esp
 make flash PORT=/dev/tty.usbserial-XXXX   # real esptool flash, native (no Docker)
 make monitor PORT=/dev/tty.usbserial-XXXX # watch the serial console (minicom, native)
 make shell                        # drop into the dev container (idf.py available)
-make can-sniff [SECONDS=10]       # Mac-side sniff via cantool.py (own venv, auto-created)
+make can-sniff                    # Mac-side sniff via cantool.py, Ctrl-C to stop (own venv, auto-created)
 make can-send FRAME=123#DEADBEEF  # Mac-side send via cantool.py
 make clean
 ```
