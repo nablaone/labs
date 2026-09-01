@@ -196,6 +196,16 @@ First `make build` triggers the Docker image pull (the official
 `espressif/idf` image — toolchain + IDF baked in, multi-GB). Later builds
 reuse the cached image and are incremental.
 
+`CMakeLists.txt` sets `COMPONENTS main` before `project()` — by default
+`idf.py` compiles ESP-IDF's *entire* bundled component set on a clean
+build (WiFi provisioning, MQTT, SPIFFS, FAT, JSON, coredump, etc.), none
+of which this app (USB-serial CLI + GPIO + I2C + CAN only) actually
+needs or links into the final binary (`idf.py size-components` shows
+the real, much smaller linked set) — it's pure build-time cost. This
+setting restricts the component search to `main` and whatever it
+actually (transitively) requires, cutting a clean build from ~980 to
+~580 compile steps.
+
 `make flash` runs `esptool` **natively on the host**, not through Docker —
 a USB-serial connection (the DevKit's onboard CP2102 chip) has no special
 passthrough problems on macOS, unlike SWD debug probes, so there's no
