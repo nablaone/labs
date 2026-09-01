@@ -39,11 +39,28 @@ exist are meant to change per node.
   own. Owns the `rate` CLI command (sets its own period).
 - **`button_task.c`/`.h`** — polls the button every 100ms; increments the
   counter on every poll where it reads pressed (holding it down keeps
-  incrementing, not just a single bump per press).
-- **`display_task.c`/`.h`** — logs the counter's value every 10s.
-- **`can.c`/`.h`** — TWAI driver + self-test + send/sniff. Not a
-  background task (no loop of its own) — driven entirely by the `can` CLI
-  command. See below.
+  incrementing, not just a single bump per press), and (if CAN is
+  enabled) broadcasts the new value too: 4 bytes, little-endian, on ID
+  `0x110` — a scratch ID in
+  [../../docs/can-message-spec.md](../../docs/can-message-spec.md)'s
+  unallocated gap (`0x100`–`0x6FF`), numerically lower (so
+  higher-priority) than `display_task`'s `0x7F0` since a button press is
+  a more immediate event than periodic telemetry.
+- **`display_task.c`/`.h`** — logs the counter's value every 10s, and (if
+  CAN is enabled) broadcasts it too: 4 bytes, little-endian, on ID
+  `0x7F0`. Deliberately a high 11-bit ID — CAN arbitration is
+  lowest-ID-wins, so this is the *lowest*-priority traffic on the bus, as
+  fits a non-critical periodic debug broadcast. Sits in
+  [../../docs/can-message-spec.md](../../docs/can-message-spec.md)'s
+  diagnostics band (`0x700`–`0x7FF`) but away from that doc's `0x7NN`
+  `NODE_HEARTBEAT` pattern — this is an experimental broadcast, not a
+  registered message.
+- **`can.c`/`.h`** — TWAI driver + self-test + send/sniff, plus
+  `can_send(id, data, len)` and the `can_send_u32(id, value)` convenience
+  wrapper (little-endian 32-bit payload) other modules call directly
+  (`display_task`/`button_task` use it for the broadcasts above). Not a
+  background task (no loop of its own) — otherwise driven entirely by the
+  `can` CLI command. See below.
 - **`console.c`/`.h`** — `esp_console`/linenoise setup and the
   `console_task` loop (below), plus the core `help`/`version`/`exit`
   commands common to every node. This is "the same debug strategy" every

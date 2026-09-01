@@ -68,6 +68,40 @@ static void can_log_status(void)
 		 status.tx_failed_count, status.arb_lost_count, status.bus_error_count);
 }
 
+bool can_send(uint32_t id, const uint8_t *data, size_t len)
+{
+	if (len > 8) {
+		ESP_LOGE(TAG, "send: %u bytes is too long (max 8)", (unsigned)len);
+		return false;
+	}
+
+	twai_message_t msg = {
+		.identifier = id,
+		.data_length_code = len,
+	};
+	memcpy(msg.data, data, len);
+
+	esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(1000));
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "send failed: %s", esp_err_to_name(err));
+		can_log_status();
+		return false;
+	}
+
+	return true;
+}
+
+bool can_send_u32(uint32_t id, uint32_t value)
+{
+	uint8_t data[4] = {
+		(uint8_t)(value & 0xFF),
+		(uint8_t)((value >> 8) & 0xFF),
+		(uint8_t)((value >> 16) & 0xFF),
+		(uint8_t)((value >> 24) & 0xFF),
+	};
+	return can_send(id, data, sizeof(data));
+}
+
 /* Transmits one frame and expects it back via the transceiver's own
  * electrical loopback -- pass confirms TX pin, RX pin, and the
  * transceiver chip are all wired and working. Caller must already have
@@ -193,25 +227,22 @@ static int cmd_can_send(const char *frame)
 		return 1;
 	}
 
-	twai_message_t msg = {
-		.identifier = strtoul(id_str, NULL, 16),
-		.data_length_code = data_hex_len / 2,
-	};
-	for (int i = 0; i < msg.data_length_code; i++) {
+	uint8_t data[8];
+	size_t len = data_hex_len / 2;
+	for (size_t i = 0; i < len; i++) {
 		char byte_str[3] = { data_str[i * 2], data_str[i * 2 + 1], '\0' };
-		msg.data[i] = (uint8_t)strtoul(byte_str, NULL, 16);
+		data[i] = (uint8_t)strtoul(byte_str, NULL, 16);
 	}
 
-	esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(1000));
-	if (err != ESP_OK) {
-		printf("send failed: %s\n", esp_err_to_name(err));
-		can_log_status();
+	uint32_t id = strtoul(id_str, NULL, 16);
+	if (!can_send(id, data, len)) {
+		printf("send failed\n");
 		return 1;
 	}
 
-	printf("sent %03" PRIX32 "#", msg.identifier);
-	for (int i = 0; i < msg.data_length_code; i++) {
-		printf("%02X", msg.data[i]);
+	printf("sent %03" PRIX32 "#", id);
+	for (size_t i = 0; i < len; i++) {
+		printf("%02X", data[i]);
 	}
 	printf("\n");
 	return 0;
