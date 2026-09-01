@@ -46,11 +46,17 @@ exist are meant to change per node.
   unallocated gap (`0x100`–`0x6FF`), numerically lower (so
   higher-priority) than `display_task`'s `0x7F0` since a button press is
   a more immediate event than periodic telemetry.
-- **`display_task.c`/`.h`** — logs the counter's value every 10s, and (if
-  CAN is enabled) broadcasts it too: 4 bytes, little-endian, on ID
-  `0x7F0`. Deliberately a high 11-bit ID — CAN arbitration is
-  lowest-ID-wins, so this is the *lowest*-priority traffic on the bus, as
-  fits a non-critical periodic debug broadcast. Sits in
+- **`display_task.c`/`.h`** — cycles through three parameters every
+  `DISPLAY_CYCLE_MS` (2s): `version` (`FIRMWARE_VERSION`), `counter`
+  (the excitement counter), and a static `hello`/`world`. Each is
+  logged, and (if this node has an LCD) shown there as `<name>` on line
+  1 / `<value>` on line 2 via `lcd_display()` — same public API any
+  other module would use, this task has no special access to the
+  display. Only the counter's turn also broadcasts over CAN (if
+  enabled): 4 bytes, little-endian, on ID `0x7F0`. Deliberately a high
+  11-bit ID — CAN arbitration is lowest-ID-wins, so this is the
+  *lowest*-priority traffic on the bus, as fits a non-critical periodic
+  debug broadcast. Sits in
   [../../docs/can-message-spec.md](../../docs/can-message-spec.md)'s
   diagnostics band (`0x700`–`0x7FF`) but away from that doc's `0x7NN`
   `NODE_HEARTBEAT` pattern — this is an experimental broadcast, not a
@@ -76,14 +82,18 @@ exist are meant to change per node.
   wired backpack independently verified alive at the same address via
   a Raspberry Pi's `i2cdetect` — so presence is decided by a real
   `i2c_master_transmit()` write instead. That bus also turned out to be
-  marginal on real writes (occasional genuine `I2C software timeout`,
-  likely weak pull-ups — only the ESP32's internal ones are engaged —
-  plus breadboard/jumper-wire capacitance), so `pcf8574_write()` retries
-  each byte a few times with a short gap between attempts, the I2C
-  clock runs well under the 100kHz standard-mode default, and
-  `hd44780_init_sequence()` explicitly space-fills both rows on top of
-  the normal HD44780 clear command, rather than trusting a single
-  clear to leave a clean screen on a bus this marginal.
+  marginal on real writes (occasional genuine `I2C software timeout`),
+  confirmed to be weak pull-ups (only the ESP32's internal ~45kΩ ones
+  were engaged) once adding real external pull-up resistors cut the
+  failure rate drastically — standard 100kHz/`glitch_ignore_cnt=7`
+  settings, with the pull-ups, produce noticeably *fewer* failures than
+  an earlier attempt at a slower clock + higher glitch tolerance did
+  without them, so that wasn't a useful mitigation on its own.
+  `pcf8574_write()` still retries each byte a few times with a short
+  gap between attempts as a safety net (the failure rate didn't reach
+  zero), and `hd44780_init_sequence()` explicitly space-fills both rows
+  on top of the normal HD44780 clear command, rather than trusting a
+  single clear to leave a clean screen on a bus that can still glitch.
 - **`console.c`/`.h`** — `esp_console`/linenoise setup and the
   `console_task` loop (below), plus the core `help`/`version`/`exit`
   commands common to every node. This is "the same debug strategy" every

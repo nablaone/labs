@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -10,6 +11,9 @@
 #include "display_task.h"
 #if NODE_ENABLE_CAN
 #include "can.h"
+#endif
+#if NODE_ENABLE_LCD
+#include "lcd_task.h"
 #endif
 
 static const char *TAG = "display";
@@ -23,26 +27,66 @@ static const char *TAG = "display";
  * broadcast, not that registered message. */
 #define DISPLAY_CAN_ID 0x7F0
 
+/* Parameters this task cycles through, one per DISPLAY_CYCLE_MS. */
+typedef enum {
+	DISPLAY_PARAM_VERSION = 0,
+	DISPLAY_PARAM_COUNTER,
+	DISPLAY_PARAM_HELLO,
+	DISPLAY_PARAM_COUNT,
+} display_param_t;
+
 void display_task_init(void)
 {
-	/* Nothing to set up -- just logs (and, if CAN is enabled, sends) on
-	 * a timer. */
+	/* Nothing to set up -- just cycles through parameters on a timer. */
 }
 
-/* Logs the excitement counter's value every DISPLAY_MS (suppressed along
- * with everything else while CLI mode has the log level muted), and --
- * if this node has CAN -- broadcasts it too. can_send_u32() logs its own
- * failure reason, so nothing else to do here if it fails. */
+/* Cycles through version / counter / hello every DISPLAY_CYCLE_MS. Each
+ * is logged (suppressed along with everything else while CLI mode has
+ * the log level muted) and, if this node has an LCD, shown there too as
+ * "<name>" on line 1 / "<value>" on line 2 via lcd_display() -- the same
+ * public API any other module would use, this task has no special
+ * access to the display. Only the counter's turn also broadcasts over
+ * CAN -- can_send_u32() logs its own failure reason, so nothing else to
+ * do here if it fails. */
 void display_task(void *arg)
 {
+	display_param_t param = DISPLAY_PARAM_VERSION;
+
 	while (1) {
-		vTaskDelay(pdMS_TO_TICKS(DISPLAY_MS));
-
-		uint32_t counter = state_counter_read();
-		ESP_LOGI(TAG, "excitement counter = %" PRIu32, counter);
-
-#if NODE_ENABLE_CAN
-		can_send_u32(DISPLAY_CAN_ID, counter);
+		switch (param) {
+		case DISPLAY_PARAM_VERSION:
+			ESP_LOGI(TAG, "version = %s", FIRMWARE_VERSION);
+#if NODE_ENABLE_LCD
+			lcd_display("version", FIRMWARE_VERSION);
 #endif
+			break;
+
+		case DISPLAY_PARAM_COUNTER: {
+			uint32_t counter = state_counter_read();
+			ESP_LOGI(TAG, "counter = %" PRIu32, counter);
+#if NODE_ENABLE_LCD
+			char value[12];
+			snprintf(value, sizeof(value), "%" PRIu32, counter);
+			lcd_display("counter", value);
+#endif
+#if NODE_ENABLE_CAN
+			can_send_u32(DISPLAY_CAN_ID, counter);
+#endif
+			break;
+		}
+
+		case DISPLAY_PARAM_HELLO:
+			ESP_LOGI(TAG, "hello = world");
+#if NODE_ENABLE_LCD
+			lcd_display("hello", "world");
+#endif
+			break;
+
+		default:
+			break;
+		}
+
+		param = (param + 1) % DISPLAY_PARAM_COUNT;
+		vTaskDelay(pdMS_TO_TICKS(DISPLAY_CYCLE_MS));
 	}
 }

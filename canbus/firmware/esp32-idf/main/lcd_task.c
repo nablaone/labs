@@ -49,14 +49,15 @@ static SemaphoreHandle_t lcd_mutex;
  * check. lcd_task_init() uses this return value, not the probe/scan, to
  * decide whether the LCD is actually present.
  *
- * Retries a few times on failure: this bus is also marginal on real
- * transmits, not just probe() -- occasional genuine "I2C software
- * timeout" errors were observed mid-write during bring-up (likely weak
- * pull-ups -- only the ESP32's internal ~45k ones are engaged -- plus
- * breadboard/jumper-wire capacitance). A single dropped nibble
- * transaction mid-byte desyncs the HD44780's 4-bit nibble pairing for
- * everything written after it, which is what garbled the screen the
- * first time this ran without retries. */
+ * Retries a few times on failure: real transmits, not just probe(),
+ * occasionally hit genuine "I2C software timeout" errors mid-write. A
+ * single dropped nibble transaction mid-byte desyncs the HD44780's
+ * 4-bit nibble pairing for everything written after it, which is what
+ * garbled the screen the first time this ran without retries. Adding
+ * real external pull-up resistors (this bus initially ran on just the
+ * ESP32's weak internal ~45k ones) cut the failure rate drastically,
+ * confirming that was the dominant cause -- but it didn't reach zero,
+ * so the retry loop stays as a safety net regardless. */
 static bool pcf8574_write(uint8_t value)
 {
 	for (int attempt = 0; attempt < 5; attempt++) {
@@ -180,10 +181,15 @@ void lcd_task_init(void)
 		.sda_io_num = I2C_SDA_GPIO,
 		.scl_io_num = I2C_SCL_GPIO,
 		.clk_source = I2C_CLK_SRC_DEFAULT,
-		/* Higher than the typical default (7) -- more tolerance for
-		 * short noise spikes on this marginal bus (see
-		 * pcf8574_write()'s doc comment). */
-		.glitch_ignore_cnt = 20,
+		/* Typical default. An earlier bump to 20 (paired with a 20kHz
+		 * clock below) was tried while chasing bus errors, but real
+		 * external pull-ups turned out to be the actual fix -- with
+		 * those in place, this standard value plus the 100kHz clock
+		 * below produce noticeably *fewer* real transmit failures than
+		 * the "more conservative" settings did, so this isn't a
+		 * conservative-vs-aggressive tradeoff, it's just the better
+		 * setting for this bus (see pcf8574_write()'s doc comment). */
+		.glitch_ignore_cnt = 7,
 		.flags.enable_internal_pullup = true,
 	};
 	if (i2c_new_master_bus(&bus_config, &i2c_bus) != ESP_OK) {
@@ -196,11 +202,9 @@ void lcd_task_init(void)
 	i2c_device_config_t dev_config = {
 		.dev_addr_length = I2C_ADDR_BIT_LEN_7,
 		.device_address = LCD_I2C_ADDR,
-		/* Well under the 100kHz standard-mode default -- more margin
-		 * for this bus's weak pull-ups (see pcf8574_write()'s doc
-		 * comment). Combined with the retries there, not relied on
-		 * alone. */
-		.scl_speed_hz = 20000,
+		/* Standard-mode default -- see glitch_ignore_cnt's comment
+		 * above. */
+		.scl_speed_hz = 100000,
 	};
 	if (i2c_master_bus_add_device(i2c_bus, &dev_config, &lcd_dev) != ESP_OK) {
 		ESP_LOGE(TAG, "init: failed to add LCD I2C device (addr 0x%02x)",

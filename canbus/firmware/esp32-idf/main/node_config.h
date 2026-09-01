@@ -64,7 +64,7 @@
 #define I2C_SCL_GPIO GPIO_NUM_27
 #define LCD_I2C_ADDR 0x27
 
-#define POLL_MS       100
-#define HEARTBEAT_MS  1000
-#define DISPLAY_MS    10000
-#define LCD_UPDATE_MS 200
+#define POLL_MS          100
+#define HEARTBEAT_MS     1000
+#define DISPLAY_CYCLE_MS 2000
+#define LCD_UPDATE_MS    200
