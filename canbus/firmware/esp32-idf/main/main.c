@@ -271,43 +271,21 @@ static int cmd_can_xcvr(void)
 	return ok ? 0 : 1;
 }
 
-/* Non-blocking check for a stray Enter on the console UART -- stdin is in
- * blocking mode (see console_init()), so a plain fgetc() here would just
- * stall waiting for a keypress instead of letting the sniff loop keep
- * polling twai_receive(); uart_get_buffered_data_len()/uart_read_bytes()
- * with a zero timeout read whatever's already arrived without blocking.
- * Any non-Enter bytes in the same read are discarded along with it. */
-static bool console_enter_pressed(void)
-{
-	size_t len = 0;
-	if (uart_get_buffered_data_len(CONFIG_ESP_CONSOLE_UART_NUM, &len) != ESP_OK || len == 0) {
-		return false;
-	}
-
-	uint8_t buf[32];
-	int n = uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, buf, sizeof(buf), 0);
-	for (int i = 0; i < n; i++) {
-		if (buf[i] == '\n' || buf[i] == '\r') {
-			return true;
-		}
-	}
-
-	return false;
-}
+#define CAN_SNIFF_TIMEOUT_MS (30 * 1000)
 
 /* Prints received frames as "<id_hex>#<data_hex>" (matching cantool.py's
- * output and cansend's input format) until Enter is pressed. */
+ * output and cansend's input format) for a fixed CAN_SNIFF_TIMEOUT_MS,
+ * then returns -- no longer waits for Enter (that relied on polling the
+ * console UART for a stray keypress mid-loop, which added a variable
+ * this command's own correctness didn't need to depend on; a fixed
+ * timeout is simpler and behaves identically whether a human or a
+ * script is driving the CLI). */
 static int cmd_can_sniff(void)
 {
-	printf("Sniffing -- press Enter to stop...\n");
+	printf("Sniffing for %ds...\n", CAN_SNIFF_TIMEOUT_MS / 1000);
 
-	/* Discards a stray leftover byte from this command line's own
-	 * terminator (same CRLF quirk as run_cli()'s post-exit flush) --
-	 * without this, console_enter_pressed() sees it on the very first
-	 * check and stops immediately instead of waiting for a real Enter. */
-	uart_flush_input(CONFIG_ESP_CONSOLE_UART_NUM);
-
-	while (!console_enter_pressed()) {
+	TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(CAN_SNIFF_TIMEOUT_MS);
+	while (xTaskGetTickCount() < end) {
 		twai_message_t msg;
 		if (twai_receive(&msg, pdMS_TO_TICKS(200)) == ESP_OK) {
 			printf("%03" PRIX32 "#", msg.identifier);
@@ -478,7 +456,7 @@ static void register_cli_commands(void)
 
 	const esp_console_cmd_t can_cmd = {
 		.command = "can",
-		.help = "CAN: loop|xcvr (self-test) | sniff (until Enter) | send <id_hex>#<data_hex>",
+		.help = "CAN: loop|xcvr (self-test) | sniff (30s) | send <id_hex>#<data_hex>",
 		.func = &cmd_can,
 	};
 	ESP_ERROR_CHECK(esp_console_cmd_register(&can_cmd));

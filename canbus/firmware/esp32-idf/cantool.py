@@ -60,11 +60,15 @@ def cmd_sniff():
         # a Ctrl-C landing during that (not just the receive loop below)
         # should still exit cleanly, so it's inside this try too.
         bus = open_bus()
-        print(f"Listening on {bus.channel_info} -- Ctrl-C to stop...")
+        # flush=True: stdout is only line-buffered when connected to a
+        # real terminal -- piped/redirected/backgrounded (logging, `| tee`,
+        # this kind of scripted test) it's fully buffered by default, so
+        # frames wouldn't show up until the process exits without this.
+        print(f"Listening on {bus.channel_info} -- Ctrl-C to stop...", flush=True)
         while True:
             msg = bus.recv(timeout=0.5)
             if msg is not None:
-                print(f"{msg.arbitration_id:03X}#{msg.data.hex().upper()}")
+                print(f"{msg.arbitration_id:03X}#{msg.data.hex().upper()}", flush=True)
     except KeyboardInterrupt:
         print()
     finally:

@@ -39,8 +39,8 @@ Enter. Commands:
   transceiver) — isolates the TWAI peripheral/firmware from the hardware.
 - **`can xcvr`** — the same self-test, but with the SN65HVD230 wired
   normally — confirms the transceiver + its wiring.
-- **`can sniff`** — print received frames as `<id_hex>#<data_hex>` until
-  Enter is pressed.
+- **`can sniff`** — print received frames as `<id_hex>#<data_hex>` for a
+  fixed 30s, then return.
 - **`can send <id_hex>#<data_hex>`** — transmit one frame, e.g.
   `can send 123#DEADBEEF`.
 - **`exit`** — leave CLI mode, resume logging.
