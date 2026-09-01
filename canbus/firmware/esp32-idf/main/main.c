@@ -20,6 +20,9 @@
 #if NODE_ENABLE_CAN
 #include "can.h"
 #endif
+#if NODE_ENABLE_LCD
+#include "lcd_task.h"
+#endif
 
 static const char *TAG = "main";
 
@@ -46,6 +49,9 @@ void app_main(void)
 #if NODE_ENABLE_DISPLAY
 	display_task_init();
 #endif
+#if NODE_ENABLE_LCD
+	lcd_task_init();
+#endif
 
 #if NODE_ENABLE_CAN
 	ESP_LOGI(TAG, "CAN self-test: %s", can_run_selftest() ? "PASS" : "FAIL");
@@ -55,6 +61,9 @@ void app_main(void)
 	state_register_cli_commands();
 #if NODE_ENABLE_HEARTBEAT
 	heartbeat_task_register_cli_commands();
+#endif
+#if NODE_ENABLE_LCD
+	lcd_task_register_cli_commands();
 #endif
 
 #if NODE_ENABLE_LED
@@ -68,6 +77,9 @@ void app_main(void)
 #endif
 #if NODE_ENABLE_DISPLAY
 	xTaskCreate(display_task, "display", 3072, NULL, 5, NULL);
+#endif
+#if NODE_ENABLE_LCD
+	xTaskCreate(lcd_task, "lcd", 3072, NULL, 5, NULL);
 #endif
 
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);

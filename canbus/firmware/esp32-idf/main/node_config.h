@@ -18,6 +18,7 @@
 #define NODE_ENABLE_BUTTON    1
 #define NODE_ENABLE_DISPLAY   1
 #define NODE_ENABLE_CAN       1
+#define NODE_ENABLE_LCD       1
 
 #define FIRMWARE_VERSION "0.2.0"
 
@@ -45,6 +46,25 @@
 #define CAN_TX_GPIO GPIO_NUM_21
 #define CAN_RX_GPIO GPIO_NUM_22
 
-#define POLL_MS      100
-#define HEARTBEAT_MS 1000
-#define DISPLAY_MS   10000
+/*
+ * I2C for the HD44780/PCF8574 character LCD -- free, non-strapping pins
+ * (GPIO21/22 are already CAN, GPIO0/2 are the LED/button strapping
+ * pins). LCD_I2C_ADDR is the common PCF8574 backpack default; some ship
+ * at 0x3F -- verify/adjust for your actual board during bring-up.
+ *
+ * Originally tried on GPIO32/33 (also free/non-strapping); moved to
+ * GPIO26/27 during bring-up while chasing a "no response at all" bus
+ * result. That turned out to be a red herring -- GPIO26/27 showed the
+ * exact same symptom, and the real cause (a marginal bus needing
+ * retries -- see lcd_task.c's pcf8574_write()) was pin-independent.
+ * Left on 26/27 since that's what ended up wired/verified; no
+ * functional reason to move back.
+ */
+#define I2C_SDA_GPIO GPIO_NUM_26
+#define I2C_SCL_GPIO GPIO_NUM_27
+#define LCD_I2C_ADDR 0x27
+
+#define POLL_MS       100
+#define HEARTBEAT_MS  1000
+#define DISPLAY_MS    10000
+#define LCD_UPDATE_MS 200

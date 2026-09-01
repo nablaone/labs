@@ -61,6 +61,29 @@ exist are meant to change per node.
   (`display_task`/`button_task` use it for the broadcasts above). Not a
   background task (no loop of its own) — otherwise driven entirely by the
   `can` CLI command. See below.
+- **`lcd_task.c`/`.h`** — drives a 16x2 HD44780 character LCD over a
+  PCF8574 I2C backpack. Exposes `lcd_display(line1, line2)` for other
+  modules to call directly (mutex-protected, non-blocking — it only
+  updates in-memory state and returns; the actual I2C write happens
+  asynchronously off `lcd_task`'s own loop, which wakes every
+  `LCD_UPDATE_MS` and only touches the display if the content actually
+  changed since the last write). `lcd_task_init()` scans the whole
+  7-bit I2C address range at boot and logs what it finds — a bring-up
+  aid for backpacks that don't ship at the expected `LCD_I2C_ADDR` —
+  but that scan is informational only. `i2c_master_probe()` (the
+  scan's underlying call) was found on real hardware to report "no
+  response" for every address, including a confirmed-good, confirmed-
+  wired backpack independently verified alive at the same address via
+  a Raspberry Pi's `i2cdetect` — so presence is decided by a real
+  `i2c_master_transmit()` write instead. That bus also turned out to be
+  marginal on real writes (occasional genuine `I2C software timeout`,
+  likely weak pull-ups — only the ESP32's internal ones are engaged —
+  plus breadboard/jumper-wire capacitance), so `pcf8574_write()` retries
+  each byte a few times with a short gap between attempts, the I2C
+  clock runs well under the 100kHz standard-mode default, and
+  `hd44780_init_sequence()` explicitly space-fills both rows on top of
+  the normal HD44780 clear command, rather than trusting a single
+  clear to leave a clean screen on a bus this marginal.
 - **`console.c`/`.h`** — `esp_console`/linenoise setup and the
   `console_task` loop (below), plus the core `help`/`version`/`exit`
   commands common to every node. This is "the same debug strategy" every
@@ -84,6 +107,8 @@ Enter. Commands (registered by the module that owns each one):
   fixed 30s, then return.
 - **`can send <id_hex>#<data_hex>`** — transmit one frame, e.g.
   `can send 123#DEADBEEF`.
+- **`lcd <line1> <line2>`** — show text on the LCD (16 chars/line,
+  space-padded), e.g. `lcd hello world`.
 - **`exit`** — leave CLI mode, resume logging.
 
 The driver comes up in `TWAI_MODE_NORMAL` at boot (GPIO21/22, 500 kbit/s)
@@ -131,6 +156,13 @@ CAN needs the external SN65HVD230 transceiver wired in — GPIO21 (TX) /
 GPIO22 (RX), silkscreened **D21**/**D22** on this DevKit V1-style board.
 Full wiring table, termination, and bring-up sequence:
 [../../docs/can-bus-bringup-plan.md](../../docs/can-bus-bringup-plan.md).
+
+The LCD needs a PCF8574 I2C backpack wired in — GPIO26 (SDA) / GPIO27
+(SCL), address `0x27` by default (some backpacks ship at `0x3F` —
+`LCD_I2C_ADDR` in `node_config.h` if yours differs). `lcd_task_init()`
+logs a (non-fatal) warning at boot if a real write to that address
+fails, so the rest of the node still comes up fine before the LCD is
+wired.
 
 ## Usage
 
