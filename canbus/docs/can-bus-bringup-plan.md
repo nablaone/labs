@@ -80,7 +80,7 @@ once and debugging blind:
 
 Answers "is the transceiver actually connected and wired correctly?"
 *without* needing the Linux box or bus connected at all. Implemented in
-`firmware/esp32-idf/main/main.c` (`can_selftest()`, exposed as the
+`firmware/esp32-idf/main/can.c` (`can_selftest()`, exposed as the
 `can loop`/`can xcvr` CLI commands), confirmed against real hardware: the
 Waveshare 3945 (SN65HVD230) transceiver on GPIO21/22 (D21/D22).
 
@@ -142,7 +142,7 @@ a whole class of wiring mistakes on its own.
 ### Stage B — real bus, `TWAI_MODE_NORMAL` — CONFIRMED WORKING 2026-08-26
 
 Implemented as `can send`/`can sniff` CLI commands
-(`firmware/esp32-idf/main/main.c`), with `cantool.py` (same directory) as
+(`firmware/esp32-idf/main/can.c`), with `cantool.py` (same directory) as
 the Mac-side counterpart — same `<id_hex>#<data_hex>` frame syntax on
 both, so a frame copy-pastes cleanly between them. The driver now runs in
 `TWAI_MODE_NORMAL` by default (switching to `TWAI_MODE_NO_ACK` only

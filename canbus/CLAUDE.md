@@ -140,11 +140,12 @@ Mac can't join the bus natively.
 
 ## Open questions
 
-- ESP32 TWAI CAN pin wiring: planned (GPIO21 TX / GPIO22 RX), not yet
-  wired or implemented — see
-  [docs/can-bus-bringup-plan.md](docs/can-bus-bringup-plan.md). LED is on
-  GPIO2, button (BOOT) on GPIO0, see
-  [firmware/esp32-idf/main/main.c](firmware/esp32-idf/main/main.c).
+- ~~ESP32 TWAI CAN pin wiring~~ — done: GPIO21 TX / GPIO22 RX, confirmed
+  passing both the self-test and real bidirectional bus traffic against a
+  CANable2 — see [docs/can-bus-bringup-plan.md](docs/can-bus-bringup-plan.md).
+  Pins/enabled modules for this and future nodes live in
+  [firmware/esp32-idf/main/node_config.h](firmware/esp32-idf/main/node_config.h)
+  (LED on GPIO2, button/BOOT on GPIO0).
 - Which physical machine becomes the permanent CAN-gateway host (CANable
   bridged to SocketCAN via `canbus/scripts/setup-socketcan.sh`) — this
   Linux box has been doing that job de facto since 2026-08-04 (ESP32

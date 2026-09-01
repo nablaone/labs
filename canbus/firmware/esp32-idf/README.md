@@ -6,30 +6,54 @@ ESP32-only now: no Zephyr, no Pico, no shared board-agnostic abstraction to
 maintain. Everything runs through Docker via the official `espressif/idf`
 image; no host IDF install needed for building.
 
-Current app (`main/main.c`) is a FreeRTOS threading/shared-memory demo, not
-just a blink loop — it's here to exercise the concurrency model the CAN
-work will eventually run on top of, using a 32-bit "excitement counter" as
-a stand-in for later CAN-driven events. Four tasks, one mutex-protected
-`uint32_t`:
+This app is a FreeRTOS threading/shared-memory demo, not just a blink loop
+— it's here to exercise the concurrency model, task/file structure, and
+CLI/logging pattern every future node (motor/controller/panel, see
+[../../docs/project-charter.md](../../docs/project-charter.md)) is meant to
+reuse, using a 32-bit "excitement counter" as a stand-in for later
+CAN-driven events.
 
-- **`led_task`** — every 100ms, reads the counter; toggles the LED if it
-  changed since the last read.
-- **`heartbeat_task`** — increments the counter every 1s on its own.
-- **`button_task`** — polls the button every 100ms; increments the counter
-  on every poll where it reads pressed (holding it down keeps
+## Module layout (`main/`)
+
+One file (`.c`/`.h`) per module. Each task module follows the same shape:
+an `xxx_task_init()` (one-time hardware setup, called from `app_main()`
+before the task starts) and `xxx_task()` (the actual FreeRTOS task loop,
+passed to `xTaskCreate()`). Non-task hardware modules (`can.c`) follow the
+same file-per-module convention without the task-loop part, since they're
+driven by CLI commands rather than a background loop. `main.c` itself is
+just orchestration — init each enabled module, register CLI commands,
+create tasks — and should stay identical across nodes; only
+`node_config.h` (pins, which modules are enabled) and which module files
+exist are meant to change per node.
+
+- **`node_config.h`** — the file a new node copies and edits: compile-time
+  `NODE_ENABLE_*` flags for which modules this build includes, pin
+  assignments, `FIRMWARE_VERSION`. Runtime (NVRAM-backed) reconfiguration
+  is a planned extension, not implemented yet.
+- **`state.c`/`.h`** — the shared "excitement counter" + heartbeat period,
+  mutex-protected (`SemaphoreHandle_t`) since tasks run concurrently
+  across the ESP32's two cores. Owns the `counter` CLI command.
+- **`led_task.c`/`.h`** — every 100ms, reads the counter; toggles the LED
+  if it changed since the last read.
+- **`heartbeat_task.c`/`.h`** — increments the counter every 1s on its
+  own. Owns the `rate` CLI command (sets its own period).
+- **`button_task.c`/`.h`** — polls the button every 100ms; increments the
+  counter on every poll where it reads pressed (holding it down keeps
   incrementing, not just a single bump per press).
-- **`app_main`** (the main task) — logs the counter's value every 10s.
+- **`display_task.c`/`.h`** — logs the counter's value every 10s.
+- **`can.c`/`.h`** — TWAI driver + self-test + send/sniff. Not a
+  background task (no loop of its own) — driven entirely by the `can` CLI
+  command. See below.
+- **`console.c`/`.h`** — `esp_console`/linenoise setup and the
+  `console_task` loop (below), plus the core `help`/`version`/`exit`
+  commands common to every node. This is "the same debug strategy" every
+  node's firmware shares.
 
-All three worker tasks (and `app_main`) can run concurrently across the
-ESP32's two cores, so the counter is guarded by a FreeRTOS mutex
-(`SemaphoreHandle_t`) rather than relying on plain reads/writes being
-atomic.
-
-A fifth task, `console_task`, waits for Enter on the serial console; once
-seen, it silences logging (`esp_log_level_set("*", ESP_LOG_NONE)`) and runs
-an `esp_console`/linenoise REPL until the `exit` command is typed, at which
+`console_task` waits for Enter on the serial console; once seen, it
+silences logging (`esp_log_level_set("*", ESP_LOG_NONE)`) and runs an
+`esp_console`/linenoise REPL until the `exit` command is typed, at which
 point logging resumes and `console_task` goes back to waiting for the next
-Enter. Commands:
+Enter. Commands (registered by the module that owns each one):
 
 - **`help`** — list all commands (built into `esp_console`).
 - **`version`** — firmware + ESP-IDF version.
@@ -48,7 +72,7 @@ Enter. Commands:
 The driver comes up in `TWAI_MODE_NORMAL` at boot (GPIO21/22, 500 kbit/s)
 after running the self-test once automatically (temporarily switching to
 `TWAI_MODE_NO_ACK` and back — see `can_reinit()`/`can_run_selftest()` in
-`main/main.c`), logging PASS/FAIL. `can loop`/`can xcvr` do the same
+`main/can.c`), logging PASS/FAIL. `can loop`/`can xcvr` do the same
 temporary switch on demand. See
 [../../docs/can-bus-bringup-plan.md](../../docs/can-bus-bringup-plan.md)
 for the reasoning and Stage A/B plan.
