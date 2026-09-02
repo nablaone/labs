@@ -5,6 +5,7 @@
 #include "node_config.h"
 #include "state.h"
 #include "console.h"
+#include "identity.h"
 #if NODE_ENABLE_LED
 #include "led_task.h"
 #endif
@@ -23,6 +24,9 @@
 #if NODE_ENABLE_LCD
 #include "lcd_task.h"
 #endif
+#if NODE_ENABLE_PINGPONG
+#include "pingpong_task.h"
+#endif
 
 static const char *TAG = "main";
 
@@ -35,6 +39,7 @@ static const char *TAG = "main";
 void app_main(void)
 {
 	state_init();
+	identity_init();
 	console_init();
 
 #if NODE_ENABLE_LED
@@ -52,6 +57,9 @@ void app_main(void)
 #if NODE_ENABLE_LCD
 	lcd_task_init();
 #endif
+#if NODE_ENABLE_PINGPONG
+	pingpong_task_init();
+#endif
 
 #if NODE_ENABLE_CAN
 	ESP_LOGI(TAG, "CAN self-test: %s", can_run_selftest() ? "PASS" : "FAIL");
@@ -59,6 +67,7 @@ void app_main(void)
 #endif
 
 	state_register_cli_commands();
+	identity_register_cli_commands();
 #if NODE_ENABLE_HEARTBEAT
 	heartbeat_task_register_cli_commands();
 #endif
@@ -80,6 +89,12 @@ void app_main(void)
 #endif
 #if NODE_ENABLE_LCD
 	xTaskCreate(lcd_task, "lcd", 3072, NULL, 5, NULL);
+#endif
+#if NODE_ENABLE_CAN
+	xTaskCreate(can_rx_task, "can_rx", 3072, NULL, 5, NULL);
+#endif
+#if NODE_ENABLE_PINGPONG
+	xTaskCreate(pingpong_task, "pingpong", 3072, NULL, 5, NULL);
 #endif
 
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);

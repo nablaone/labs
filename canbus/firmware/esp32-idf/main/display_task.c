@@ -15,6 +15,10 @@
 #if NODE_ENABLE_LCD
 #include "lcd_task.h"
 #endif
+#if NODE_ENABLE_PINGPONG
+#include "identity.h"
+#include "pingpong_task.h"
+#endif
 
 static const char *TAG = "display";
 
@@ -32,6 +36,9 @@ typedef enum {
 	DISPLAY_PARAM_VERSION = 0,
 	DISPLAY_PARAM_COUNTER,
 	DISPLAY_PARAM_HELLO,
+#if NODE_ENABLE_PINGPONG
+	DISPLAY_PARAM_PING,
+#endif
 	DISPLAY_PARAM_COUNT,
 } display_param_t;
 
@@ -81,6 +88,54 @@ void display_task(void *arg)
 			lcd_display("hello", "world");
 #endif
 			break;
+
+#if NODE_ENABLE_PINGPONG
+		case DISPLAY_PARAM_PING: {
+			identity_mode_t mode;
+			char line1[24], line2[24];
+
+			if (!identity_mode_read(&mode)) {
+				snprintf(line1, sizeof(line1), "unconfigured");
+				snprintf(line2, sizeof(line2), "run: config set");
+			} else {
+				uint8_t node_id;
+				char id_str[8];
+				if (identity_node_id_read(&node_id)) {
+					snprintf(id_str, sizeof(id_str), "%u", node_id);
+				} else {
+					snprintf(id_str, sizeof(id_str), "?");
+				}
+				snprintf(line1, sizeof(line1), "%s id%s",
+					  mode == IDENTITY_MODE_PING ? "ping" : "pong", id_str);
+
+				pingpong_status_t status;
+				uint32_t seq, rtt_ms;
+				pingpong_task_status_read(&status, &seq, &rtt_ms);
+				switch (status) {
+				case PINGPONG_STATUS_OK:
+					if (mode == IDENTITY_MODE_PING) {
+						snprintf(line2, sizeof(line2), "seq%" PRIu32 " %" PRIu32 "ms",
+							  seq, rtt_ms);
+					} else {
+						snprintf(line2, sizeof(line2), "seq%" PRIu32 " replied", seq);
+					}
+					break;
+				case PINGPONG_STATUS_TIMEOUT:
+					snprintf(line2, sizeof(line2), "seq%" PRIu32 " timeout", seq);
+					break;
+				default:
+					snprintf(line2, sizeof(line2), "no exchange yet");
+					break;
+				}
+			}
+
+			ESP_LOGI(TAG, "ping = %s / %s", line1, line2);
+#if NODE_ENABLE_LCD
+			lcd_display(line1, line2);
+#endif
+			break;
+		}
+#endif
 
 		default:
 			break;

@@ -28,6 +28,44 @@ import can
 
 BITRATE = 500000
 
+# Human-readable decode for "sniff"'s second column -- kept here rather than
+# shared with the firmware (no codegen/shared-header pipeline exists yet,
+# see ../../docs/can-message-spec.md's "generate, don't hand-copy" caution),
+# so update this by hand if an ID/payload changes on the C side. Each entry:
+# id -> (name, decoder(data: bytes) -> str | None). decoder returns None for
+# a payload it can't make sense of (wrong length, etc.), in which case just
+# the name is shown.
+def _u32_le(data):
+    return int.from_bytes(data[:4], "little") if len(data) >= 4 else None
+
+
+def _seq(data):
+    seq = _u32_le(data)
+    return f"seq={seq}" if seq is not None else None
+
+
+def _counter(data):
+    counter = _u32_le(data)
+    return f"counter={counter}" if counter is not None else None
+
+
+MESSAGES = {
+    0x100: ("SELFTEST", lambda d: None),  # can.c CAN_SELFTEST_ID -- loopback only, not real bus traffic
+    0x110: ("BUTTON", _counter),  # button_task.c BUTTON_CAN_ID
+    0x120: ("PING", _seq),  # pingpong_task.c CAN_ID_PING
+    0x121: ("PONG", _seq),  # pingpong_task.c CAN_ID_PONG
+    0x7F0: ("DISPLAY", _counter),  # display_task.c DISPLAY_CAN_ID
+}
+
+
+def describe(can_id, data):
+    entry = MESSAGES.get(can_id)
+    if entry is None:
+        return ""
+    name, decoder = entry
+    detail = decoder(data)
+    return f"{name} {detail}" if detail else name
+
 
 def find_port():
     port = os.environ.get("CAN_PORT")
@@ -68,7 +106,14 @@ def cmd_sniff():
         while True:
             msg = bus.recv(timeout=0.5)
             if msg is not None:
-                print(f"{msg.arbitration_id:03X}#{msg.data.hex().upper()}", flush=True)
+                frame = f"{msg.arbitration_id:03X}#{msg.data.hex().upper()}"
+                desc = describe(msg.arbitration_id, msg.data)
+                # Left-justified frame column so the description column
+                # lines up even as frame width varies with payload length
+                # (a bare id, e.g. "100#", is short; 8 data bytes is
+                # "id#" + 16 hex chars) -- 24 comfortably covers the
+                # longest real frame (11-bit id + up to 8 data bytes).
+                print(f"{frame:<24}{desc}", flush=True)
     except KeyboardInterrupt:
         print()
     finally:

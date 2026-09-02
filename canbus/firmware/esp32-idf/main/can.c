@@ -6,11 +6,13 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/twai.h"
 #include "esp_log.h"
 #include "esp_console.h"
 
 #include "node_config.h"
+#include "state.h"
 #include "can.h"
 
 static const char *TAG = "can";
@@ -20,6 +22,15 @@ static const char *TAG = "can";
  * a real message. */
 #define CAN_SELFTEST_ID 0x100
 #define CAN_SNIFF_TIMEOUT_MS (30 * 1000)
+
+/* Depth of the software RX queue can_rx_task fans frames into -- generous
+ * relative to this app's traffic (a few Hz of ping/pong plus occasional
+ * button/display broadcasts), so a consumer that's briefly slow (e.g.
+ * pingpong_task mid round-trip-timeout) doesn't lose frames under normal
+ * conditions. */
+#define CAN_RX_QUEUE_LEN 16
+
+static QueueHandle_t can_rx_queue;
 
 /*
  * Stage A/B bring-up (see ../../../docs/can-bus-bringup-plan.md). The
@@ -33,6 +44,15 @@ static const char *TAG = "can";
  * the self-test commands use it to drop into NO_ACK mode temporarily and
  * always leave the driver back in NORMAL mode on the way out.
  */
+/*
+ * NOTE: can_reinit() stops/uninstalls the driver out from under whoever's
+ * reading it -- fine at boot (can_rx_task doesn't exist yet when
+ * can_run_selftest() first runs), but running "can loop"/"can xcvr" from
+ * the CLI later, while can_rx_task is blocked in twai_receive(), races
+ * the driver being uninstalled underneath it. Not worth guarding against
+ * for a manual bring-up command in a lab app -- just don't run a self-test
+ * while pingpong is relying on the bus.
+ */
 static void can_reinit(twai_mode_t mode)
 {
 	twai_stop();
@@ -45,6 +65,15 @@ static void can_reinit(twai_mode_t mode)
 
 	ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
 	ESP_ERROR_CHECK(twai_start());
+
+	/* Created once, first time the driver comes up -- can_reinit() may
+	 * run again later (self-test CLI commands), but the software queue
+	 * itself has nothing to do with the driver instance and shouldn't be
+	 * recreated (that would orphan/leak whatever can_rx_task or a
+	 * consumer already holds a handle to). */
+	if (!can_rx_queue) {
+		can_rx_queue = xQueueCreate(CAN_RX_QUEUE_LEN, sizeof(twai_message_t));
+	}
 }
 
 /* Logs TWAI's error/state counters -- distinguishes "frame never actually
@@ -68,7 +97,12 @@ static void can_log_status(void)
 		 status.tx_failed_count, status.arb_lost_count, status.bus_error_count);
 }
 
-bool can_send(uint32_t id, const uint8_t *data, size_t len)
+/* twai_transmit()'s timeout is how long to wait for room in the driver's
+ * TX queue, not for the frame to actually be ACKed on the bus (that's
+ * the CAN controller's own job, invisible to this call either way).
+ * can_send() waits up to 1s for queue space; can_send_nowait() (0
+ * timeout) fails immediately instead if the queue's already full. */
+static bool can_send_impl(uint32_t id, const uint8_t *data, size_t len, TickType_t timeout)
 {
 	if (len > 8) {
 		ESP_LOGE(TAG, "send: %u bytes is too long (max 8)", (unsigned)len);
@@ -81,7 +115,7 @@ bool can_send(uint32_t id, const uint8_t *data, size_t len)
 	};
 	memcpy(msg.data, data, len);
 
-	esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(1000));
+	esp_err_t err = twai_transmit(&msg, timeout);
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG, "send failed: %s", esp_err_to_name(err));
 		can_log_status();
@@ -91,15 +125,36 @@ bool can_send(uint32_t id, const uint8_t *data, size_t len)
 	return true;
 }
 
+bool can_send(uint32_t id, const uint8_t *data, size_t len)
+{
+	return can_send_impl(id, data, len, pdMS_TO_TICKS(1000));
+}
+
+bool can_send_nowait(uint32_t id, const uint8_t *data, size_t len)
+{
+	return can_send_impl(id, data, len, 0);
+}
+
+static void encode_u32(uint8_t data[4], uint32_t value)
+{
+	data[0] = (uint8_t)(value & 0xFF);
+	data[1] = (uint8_t)((value >> 8) & 0xFF);
+	data[2] = (uint8_t)((value >> 16) & 0xFF);
+	data[3] = (uint8_t)((value >> 24) & 0xFF);
+}
+
 bool can_send_u32(uint32_t id, uint32_t value)
 {
-	uint8_t data[4] = {
-		(uint8_t)(value & 0xFF),
-		(uint8_t)((value >> 8) & 0xFF),
-		(uint8_t)((value >> 16) & 0xFF),
-		(uint8_t)((value >> 24) & 0xFF),
-	};
+	uint8_t data[4];
+	encode_u32(data, value);
 	return can_send(id, data, sizeof(data));
+}
+
+bool can_send_u32_nowait(uint32_t id, uint32_t value)
+{
+	uint8_t data[4];
+	encode_u32(data, value);
+	return can_send_nowait(id, data, sizeof(data));
 }
 
 /* Transmits one frame and expects it back via the transceiver's own
@@ -180,7 +235,13 @@ static int cmd_can_xcvr(void)
  * console UART for a stray keypress mid-loop, which added a variable
  * this command's own correctness didn't need to depend on; a fixed
  * timeout is simpler and behaves identically whether a human or a
- * script is driving the CLI). */
+ * script is driving the CLI).
+ *
+ * Reads via can_receive() (the shared software queue), not twai_receive()
+ * directly -- can_rx_task is the sole reader of the driver's own RX side
+ * once it's running. That does mean this command competes with any other
+ * can_receive() consumer (pingpong_task) for the same frames -- see
+ * can.h's doc comment. */
 static int cmd_can_sniff(void)
 {
 	printf("Sniffing for %ds...\n", CAN_SNIFF_TIMEOUT_MS / 1000);
@@ -188,7 +249,7 @@ static int cmd_can_sniff(void)
 	TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(CAN_SNIFF_TIMEOUT_MS);
 	while (xTaskGetTickCount() < end) {
 		twai_message_t msg;
-		if (twai_receive(&msg, pdMS_TO_TICKS(200)) == ESP_OK) {
+		if (can_receive(&msg, pdMS_TO_TICKS(200))) {
 			printf("%03" PRIX32 "#", msg.identifier);
 			for (int i = 0; i < msg.data_length_code; i++) {
 				printf("%02X", msg.data[i]);
@@ -281,4 +342,40 @@ void can_register_cli_commands(void)
 		.func = &cmd_can,
 	};
 	ESP_ERROR_CHECK(esp_console_cmd_register(&can_cmd));
+}
+
+/* The queue is created by can_run_selftest()/can_reinit() -- called at
+ * boot before this task is ever started, so it's always non-NULL here in
+ * practice. Blocks forever per iteration; nothing to time out for, since
+ * there's no per-iteration state to re-check (unlike pingpong_task, which
+ * re-reads identity_mode_read() and so needs a bounded wait). */
+void can_rx_task(void *arg)
+{
+	while (1) {
+		twai_message_t msg;
+		if (twai_receive(&msg, portMAX_DELAY) != ESP_OK) {
+			continue;
+		}
+
+		/* Every frame that actually made it off the bus counts as
+		 * "received and processed" for state.h's excitement counter
+		 * (see its own doc comment -- "CAN frame received" is one of
+		 * the events it's meant to track) -- bumped here, once per
+		 * frame, regardless of which consumer (if any) later reads it
+		 * off can_rx_queue, so a dropped/unread frame still counts as
+		 * received. Individual consumers (pingpong_task) no longer
+		 * bump it themselves on top of this, to avoid double-counting
+		 * the same frame. */
+		state_counter_increment();
+
+		if (xQueueSend(can_rx_queue, &msg, pdMS_TO_TICKS(10)) != pdTRUE) {
+			ESP_LOGW(TAG, "rx queue full, dropping frame 0x%03" PRIx32,
+				  msg.identifier);
+		}
+	}
+}
+
+bool can_receive(twai_message_t *msg, TickType_t timeout)
+{
+	return xQueueReceive(can_rx_queue, msg, timeout) == pdTRUE;
 }

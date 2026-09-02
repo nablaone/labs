@@ -19,8 +19,16 @@
 #define NODE_ENABLE_DISPLAY   1
 #define NODE_ENABLE_CAN       1
 #define NODE_ENABLE_LCD       1
+/* Requires NODE_ENABLE_CAN -- see pingpong_task.c. */
+#define NODE_ENABLE_PINGPONG  1
 
-#define FIRMWARE_VERSION "0.2.0"
+/* __DATE__ is the compiler builtin build date ("Sep  2 2026", note space-
+ * padded single-digit days) -- auto-updates every build so it can't go
+ * stale the way a hand-maintained date would, useful for telling boards
+ * apart during bring-up when it's not obvious which one has the latest
+ * flash (the "version" CLI command and display_task's "version" tab both
+ * show this). */
+#define FIRMWARE_VERSION "0.2.0 (" __DATE__ ")"
 
 /*
  * LED on GPIO2 (onboard LED) and button on GPIO0 (onboard BOOT button) --
@@ -68,3 +76,10 @@
 #define HEARTBEAT_MS     1000
 #define DISPLAY_CYCLE_MS 2000
 #define LCD_UPDATE_MS    200
+
+/* pingpong_task: period between pings (mode=ping) and how long either
+ * side waits for the next frame before re-checking identity_mode_read()
+ * (mode=pong's per-receive wait; mode=ping's per-reply wait after
+ * sending). See pingpong_task.c. */
+#define PING_PERIOD_MS  1000
+#define PING_TIMEOUT_MS 300

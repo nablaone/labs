@@ -30,6 +30,14 @@ static const char *TAG = "lcd";
 static i2c_master_bus_handle_t i2c_bus;
 static i2c_master_dev_handle_t lcd_dev;
 
+/* Set only once the presence write in lcd_task_init() actually succeeds.
+ * lcd_task() checks this before entering its loop and deletes itself if
+ * false -- otherwise every lcd_display() call from another module (once
+ * this node is running) would keep marking the display dirty, and this
+ * task would keep retrying real I2C writes against hardware that was
+ * never there, spamming the log with NACK/timeout errors indefinitely. */
+static bool lcd_present;
+
 /* Mutex-protected "what should be shown" -- lcd_display() only ever
  * touches this; lcd_task() is the sole reader/writer of the physical
  * display. */
@@ -225,6 +233,7 @@ void lcd_task_init(void)
 	}
 
 	hd44780_init_sequence();
+	lcd_present = true;
 	ESP_LOGI(TAG, "init: display ready at 0x%02x", LCD_I2C_ADDR);
 }
 
@@ -248,6 +257,15 @@ void lcd_display(const char *line1, const char *line2)
 
 void lcd_task(void *arg)
 {
+	/* No hardware to drive -- lcd_task_init() already logged why. Delete
+	 * rather than idle-loop: other modules keep calling lcd_display() on
+	 * their own schedule regardless (they have no visibility into
+	 * whether a physical display exists), which would otherwise leave
+	 * this task perpetually retrying real I2C writes against nothing. */
+	if (!lcd_present) {
+		vTaskDelete(NULL);
+	}
+
 	while (1) {
 		vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE_MS));
 

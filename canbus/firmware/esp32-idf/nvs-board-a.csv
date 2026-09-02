@@ -1,0 +1,4 @@
+key,type,encoding,value
+identity,namespace,,
+node_id,data,u8,0
+mode,data,u8,0

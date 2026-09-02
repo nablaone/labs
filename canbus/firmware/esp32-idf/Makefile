@@ -3,7 +3,7 @@ IDF_TARGET ?= esp32
 APP_DIR := $(CURDIR)
 BUILD_DIR := build
 
-.PHONY: image build monitor shell flash clean can-sniff can-send
+.PHONY: image build monitor shell flash clean can-sniff can-send nvs-flash-a nvs-flash-b
 
 image:
 	docker build -t $(IMAGE) .
@@ -54,6 +54,39 @@ monitor:
 
 shell: image
 	docker run --rm -it -v $(APP_DIR):/app -w /app $(IMAGE) bash
+
+# Pre-provision a board's identity (see README.md's "Alternative to the
+# CLI" section) straight into NVS from nvs-board-a.csv/nvs-board-b.csv,
+# instead of the "config set-*" CLI commands. NVS_OFFSET/NVS_SIZE match
+# the default single-app partition table's "nvs" partition
+# (CONFIG_PARTITION_TABLE_SINGLE_APP in sdkconfig) -- re-check with
+# `idf.py partition-table` if that table's ever changed.
+NVS_OFFSET := 0x9000
+NVS_SIZE := 0x6000
+
+# Needs the ESP-IDF python env (protobuf etc. for the NVS blob format),
+# hence run through the container like `build`, not natively. Path is
+# hardcoded rather than $IDF_PATH -- that's set by the container's own
+# entrypoint (its export script), not visible to expand from the host
+# shell Make runs this recipe line in.
+NVS_PARTITION_GEN := /opt/esp/idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py
+nvs-%.bin: nvs-%.csv image
+	docker run --rm -v $(APP_DIR):/app -w /app $(IMAGE) \
+		python3 $(NVS_PARTITION_GEN) generate $< $@ $(NVS_SIZE)
+
+# make nvs-flash-a PORT=/dev/tty.usbserial-XXXX -- board A: node_id=0, mode=ping
+# make nvs-flash-b PORT=/dev/tty.usbserial-XXXX -- board B: node_id=1, mode=pong
+# Native esptool, same reasoning as `flash` above. Writes straight to the
+# NVS partition offset, replacing the *whole* partition -- fine here,
+# `identity` is the only thing this app keeps in NVS. Verify afterward
+# with `config show` over the CLI.
+nvs-flash-a: nvs-board-a.bin
+	$(if $(PORT),,$(error No PORT found -- is the ESP32 plugged in? Or pass PORT=/dev/tty.usbserial-XXXX))
+	$(ESPTOOL) --chip esp32 --no-stub -p $(PORT) write_flash $(NVS_OFFSET) nvs-board-a.bin
+
+nvs-flash-b: nvs-board-b.bin
+	$(if $(PORT),,$(error No PORT found -- is the ESP32 plugged in? Or pass PORT=/dev/tty.usbserial-XXXX))
+	$(ESPTOOL) --chip esp32 --no-stub -p $(PORT) write_flash $(NVS_OFFSET) nvs-board-b.bin
 
 # Mac-side CAN sniff/send via cantool.py, talking directly to a CANable-
 # style dongle's slcan serial port (python-can) -- no SocketCAN needed, so

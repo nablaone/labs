@@ -37,7 +37,11 @@ void button_task(void *arg)
 			state_counter_increment();
 
 #if NODE_ENABLE_CAN
-			can_send_u32(BUTTON_CAN_ID, state_counter_read());
+			/* _nowait: a held-down button re-fires this every
+			 * POLL_MS -- shouldn't block button_task's own loop
+			 * waiting on TX queue space if the bus is busy or has
+			 * no listener. See can.h. */
+			can_send_u32_nowait(BUTTON_CAN_ID, state_counter_read());
 #endif
 		}
 
