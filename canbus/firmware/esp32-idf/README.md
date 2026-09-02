@@ -222,7 +222,19 @@ wired.
 ## Two-node bring-up (ping/pong)
 
 Two boards, one binary — `identity.c`'s runtime `mode` (not a rebuild) is
-what makes them behave differently:
+what makes them behave differently. Since only one USB cable is in use
+(swapped between boards to flash each), and macOS reuses the same
+`/dev/cu.usbserial-XXXX` path for either one, there's no way to tell
+which physical board is plugged in from the port name alone. Each
+board's MAC is fixed and unique, printed by `esptool` on every
+connect (`make flash`/`make nvs-flash-a`/etc.'s own output, or
+`esptool --chip esp32 -p PORT read_mac`) — check it against this table
+before flashing/provisioning rather than assuming:
+
+| Board | MAC |
+|---|---|
+| A (`node_id=0`, `mode=ping`) | `58:2a:bd:80:87:d4` |
+| B (`node_id=1`, `mode=pong`) | `20:9b:a9:6f:bc:90` |
 
 1. Wire the two boards' SN65HVD230 transceivers together: CAN-H to CAN-H,
    CAN-L to CAN-L, common GND. 120Ω termination at both physical ends —
