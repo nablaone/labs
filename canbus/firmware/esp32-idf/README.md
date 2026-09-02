@@ -275,19 +275,56 @@ partition table — confirm with `idf.py partition-table` if that's ever
 changed):
 
 ```
-make shell   # ESP-IDF's python env (protobuf etc.) lives in the container
-python3 $IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py \
-    generate nvs-board-a.csv nvs-board-a.bin 0x6000
-exit
-
-python3 -m esptool --chip esp32 -p /dev/tty.usbserial-XXXX \
-    write_flash 0x9000 nvs-board-a.bin
+make nvs-flash-a PORT=/dev/tty.usbserial-XXXX   # board A: node_id=0, mode=ping
+make nvs-flash-b PORT=/dev/tty.usbserial-XXXX   # board B: node_id=1, mode=pong
 ```
 
-(swap in `nvs-board-b.csv`/`nvs-board-b.bin` for board B). This *replaces*
-the whole NVS partition, so it also overwrites anything else stored
-there — fine here since `identity` is the only thing this app keeps in
-NVS. Verify with `config show` over the CLI afterward.
+(`make nvs-board-a.bin`/`make nvs-board-b.bin` generate just the image,
+without flashing, if that's ever useful on its own.) This *replaces* the
+whole NVS partition, so it also overwrites anything else stored there —
+fine here since `identity` is the only thing this app keeps in NVS.
+Verify with `config show` over the CLI afterward. Check the board's MAC
+first (see the table above) — the CSV path has no cross-check against
+what's actually plugged in, unlike `config set-id`/`set-mode` where
+you're watching the CLI respond live.
+
+## Future ideas
+
+Not implemented, no hardware ordered beyond what's already in the
+[Hardware](../../CLAUDE.md#hardware) section — rough next exercises for
+this lab, not full designs:
+
+- **Potentiometer reading** — one of the ESP32's ADC1 channels (stay off
+  ADC2's pins; per Espressif errata it can't be read at all while WiFi is
+  active, and even with WiFi off here, ADC1 is the simpler/less-caveated
+  choice), via `esp_adc`/`adc_oneshot`. The simplest possible analog-input
+  exercise, and a stand-in for any real setpoint pot before wiring
+  anything scooter-specific.
+- **Hall sensor throttle reading** — a twist-grip e-scooter throttle is
+  usually a 3-wire *analog* Hall sensor (VCC/GND/signal, signal roughly
+  0.8–4.2V proportional to twist) — not the pulse-counting Hall input
+  [docs/reference-node.md](../../docs/reference-node.md) already
+  describes for wheel-speed sensing (same sensor technology, different
+  wiring/reading entirely: ADC read here vs. GPIO interrupt/pulse-count
+  there). Same ADC path as the potentiometer above; check the signal
+  range against the ESP32 ADC's ~3.3V max first (a 5V-railed throttle
+  needs a voltage divider). Broadcasting it as a real message would land
+  in [docs/can-message-spec.md](../../docs/can-message-spec.md)'s
+  Setpoints band (`0x040–0x07F`, "panel throttle/direction").
+- **DC motor control (4-wire)** — an H-bridge driver (direction + PWM
+  speed, however that node's 4 wires end up split between motor leads
+  and control signals depending on the driver chosen) commanded by a
+  `MOTOR_COMMAND`-shaped CAN message —
+  [docs/can-message-spec.md](../../docs/can-message-spec.md) already
+  sketches `0x011 MOTOR_COMMAND` (command_type/direction/setpoint/flags)
+  as the template. First real actuator on the bus; would want
+  `SPEED_FEEDBACK` (`0x020`) too once there's something to measure speed
+  from.
+- **Third ESP32 node** — extend the two-node ping/pong bus to three.
+  Would finally give `identity.c`'s `node_id` (persisted, but unused
+  since only `mode` drives behavior so far) a real job telling nodes
+  apart, and exercise genuine multi-transmitter bus arbitration instead
+  of just two nodes taking turns.
 
 ## Usage
 
