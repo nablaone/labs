@@ -11,13 +11,16 @@
  * rewrites the app partition, not NVS) so a board keeps its identity
  * across rebuilds -- only `esptool erase_flash` clears it. Changing
  * role via "config set-role" reboots the board immediately (see
- * identity.c) since main.c only picks ping_task/pong_task once, at
- * boot -- changing node_id does not reboot, since nothing reads it yet.
+ * identity.c) since main.c only ever dispatches to one role's launcher
+ * once, at boot -- changing node_id does not reboot, since nothing
+ * reads it yet.
  */
 
 typedef enum {
 	IDENTITY_ROLE_PING = 0,
 	IDENTITY_ROLE_PONG = 1,
+	IDENTITY_ROLE_POT_SENDER = 2,
+	IDENTITY_ROLE_POT_COLLECTOR = 3,
 } identity_role_t;
 
 /* Initializes NVS (erasing and retrying once if the partition is in a

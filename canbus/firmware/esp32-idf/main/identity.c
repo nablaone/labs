@@ -35,6 +35,10 @@ static const char *role_name(identity_role_t role)
 		return "ping";
 	case IDENTITY_ROLE_PONG:
 		return "pong";
+	case IDENTITY_ROLE_POT_SENDER:
+		return "pot-sender";
+	case IDENTITY_ROLE_POT_COLLECTOR:
+		return "pot-collector";
 	default:
 		return "<unknown>";
 	}
@@ -168,8 +172,12 @@ static int cmd_config_set_role(const char *arg)
 		role = IDENTITY_ROLE_PING;
 	} else if (strcmp(arg, "pong") == 0) {
 		role = IDENTITY_ROLE_PONG;
+	} else if (strcmp(arg, "pot-sender") == 0) {
+		role = IDENTITY_ROLE_POT_SENDER;
+	} else if (strcmp(arg, "pot-collector") == 0) {
+		role = IDENTITY_ROLE_POT_COLLECTOR;
 	} else {
-		printf("bad role '%s' (expected 'ping' or 'pong')\n", arg);
+		printf("bad role '%s' (expected 'ping', 'pong', 'pot-sender', or 'pot-collector')\n", arg);
 		return 1;
 	}
 
@@ -185,7 +193,7 @@ static int cmd_config_set_role(const char *arg)
 static int cmd_config(int argc, char **argv)
 {
 	if (argc < 2) {
-		printf("usage: config <show|set-id <n>|set-role <ping|pong>>\n");
+		printf("usage: config <show|set-id <n>|set-role <ping|pong|pot-sender|pot-collector>>\n");
 		return 1;
 	}
 
@@ -199,7 +207,7 @@ static int cmd_config(int argc, char **argv)
 		return cmd_config_set_id(argv[2]);
 	} else if (strcmp(argv[1], "set-role") == 0) {
 		if (argc < 3) {
-			printf("usage: config set-role <ping|pong>\n");
+			printf("usage: config set-role <ping|pong|pot-sender|pot-collector>\n");
 			return 1;
 		}
 		return cmd_config_set_role(argv[2]);
@@ -213,7 +221,7 @@ void identity_register_cli_commands(void)
 {
 	const esp_console_cmd_t config_cmd = {
 		.command = "config",
-		.help = "Node identity: show | set-id <n> | set-role <ping|pong> (reboots)",
+		.help = "Node identity: show | set-id <n> | set-role <ping|pong|pot-sender|pot-collector> (reboots)",
 		.func = &cmd_config,
 	};
 	ESP_ERROR_CHECK(esp_console_cmd_register(&config_cmd));

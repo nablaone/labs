@@ -141,12 +141,27 @@ to change per node.
   `pong_role.*`, matching each file's name) from its own `status_set()`
   (two separate, near-identical copies — no status state or mutex of
   their own, since `metrics.c`'s table is already mutex-protected). The
-  two files duplicate a handful
-  of small pieces on purpose (the `CAN_ID_PING`/`CAN_ID_PONG` `#define`s,
-  `decode_seq()`, `status_set()`) rather than share a third module,
-  trading a little repetition for each file being fully self-contained —
-  the `CAN_ID_*` values do need to stay in sync between the two copies
-  if either ever changes.
+  two files duplicate a handful of small pieces on purpose (the
+  `CAN_ID_PING`/`CAN_ID_PONG` `#define`s, `decode_seq()`, `status_set()`)
+  rather than share a third module, trading a little repetition for each
+  file being fully self-contained — the `CAN_ID_*` values do need to
+  stay in sync between the two copies if either ever changes.
+- **`pot_sender_role.c`/`.h`** and **`pot_collector_role.c`/`.h`** —
+  potentiometer bring-up exercise, same one-file-per-role shape as
+  ping/pong: `pot_sender_role.c` reads the pot wired to `POT_GPIO`
+  (`node_config.h` — pin choice, wiring diagram, and why no resistors
+  are needed) via ADC1 (`esp_adc`/`adc_oneshot`, raw 12-bit counts, no
+  calibration to millivolts — deliberately the simplest possible analog
+  read) every `POT_SEND_PERIOD_MS`, broadcasts it over CAN (scratch ID
+  `0x130`) via `can_send_u32()`, and publishes the same raw value as the
+  `pot_sender.raw` metric; `pot_collector_role.c` listens for that
+  broadcast and republishes it as `pot_collector.raw`. Like ping/pong,
+  each owns an unconditional `launch_*_role()` (`launch_pot_sender_role()`/
+  `launch_pot_collector_role()`) with no role check of its own —
+  `main.c`'s switch (below) is the only thing that decides which one (if
+  either) gets called. Requires `NODE_ENABLE_CAN`; needs a second board running
+  `pot-collector` to see the value show up anywhere but this board's own
+  LCD (see the bring-up section below).
 - **`identity.c`/`.h`** — per-unit runtime identity (`node_id`, `role`),
   stored in NVS rather than `node_config.h` since the goal is one shared
   binary flashed to every board, differentiated only by what's set over
@@ -171,17 +186,18 @@ Enter. Commands (registered by the module that owns each one):
 - **`counter`** — current excitement counter value.
 - **`metrics`** — dump the whole `metrics.c` status table (key, type,
   value); `version`, `counter`, and `identity.role` are always
-  registered, plus that role's `status`/`seq`/`rtt_ms` (`ping_role.*` or
-  `pong_role.*`) once this board's role is configured and `main.c`'s
-  switch has called the matching `launch_*_role()`.
+  registered, plus whichever role-specific metric `main.c`'s switch has
+  started for this board: `ping_role.*`/`pong_role.*` (`status`/`seq`/
+  `rtt_ms`) or `pot_sender.raw`/`pot_collector.raw`.
 - **`config show`** — print this board's node_id/role (`unset` if never
   configured).
 - **`config set-id <n>`** — set and persist (NVS) this board's node_id
   (0-255). Does not reboot — nothing reads `node_id` yet.
-- **`config set-role <ping|pong>`** — set and persist (NVS) this board's
-  role, then **reboot immediately** so `main.c`'s switch (see
-  `ping_role.c`/`pong_role.c` above) dispatches to the matching role on
-  the next boot.
+- **`config set-role <ping|pong|pot-sender|pot-collector>`** — set and
+  persist (NVS) this board's role, then **reboot immediately** so
+  `main.c`'s switch (see `ping_role.c`/`pong_role.c`/`pot_sender_role.c`/
+  `pot_collector_role.c` above) dispatches to the matching role on the
+  next boot.
 - **`can loop`** — self-test with D21 jumpered directly to D22 (no
   transceiver) — isolates the TWAI peripheral/firmware from the hardware.
 - **`can xcvr`** — the same self-test, but with the SN65HVD230 wired
@@ -242,6 +258,25 @@ The LCD needs a PCF8574 I2C backpack wired in — GPIO26 (SDA) / GPIO27
 logs a (non-fatal) warning at boot if a real write to that address
 fails, so the rest of the node still comes up fine before the LCD is
 wired.
+
+A `pot-sender`-role board needs a standard 3-terminal linear
+potentiometer wired to **GPIO34** (ADC1 channel 6, input-only — free,
+not used by anything else above; see `node_config.h`'s `POT_GPIO`
+comment for the full pin-choice reasoning, including why ADC2 pins are
+avoided). **No resistors are needed** — the pot itself is the voltage
+divider:
+
+| Pot terminal | Connects to |
+|---|---|
+| outer terminal 1 | **3V3** |
+| outer terminal 2 | **GND** |
+| wiper (center terminal) | **GPIO34** |
+
+Don't wire either outer terminal to a 5V rail — the ESP32 ADC's input
+range tops out at its 3.3V supply. A common, safe value is a 10kΩ
+linear pot; roughly 1kΩ–100kΩ all work fine (much lower wastes current,
+much higher starts to measurably affect ADC accuracy since the ADC's
+input impedance is finite).
 
 ## Two-node bring-up (ping/pong)
 
@@ -318,29 +353,54 @@ first (see the table above) — the CSV path has no cross-check against
 what's actually plugged in, unlike `config set-id`/`set-role` where
 you're watching the CLI respond live.
 
+## Potentiometer bring-up (pot-sender/pot-collector)
+
+Same two-board shape as ping/pong, but one board reads real analog
+hardware instead of exchanging synthetic frames. `pot-sender` needs the
+potentiometer wired per [Wiring](#wiring) above; `pot-collector` needs
+nothing extra beyond CAN.
+
+1. Wire the two boards' SN65HVD230 transceivers together (same as the
+   ping/pong bus above), and wire a potentiometer to whichever board
+   will run `pot-sender` (see Wiring above).
+2. `make build` once; `make flash PORT=...` both boards with the exact
+   same binary.
+3. On the sender board's CLI: `config set-role pot-sender`.
+4. On the collector board's CLI: `config set-role pot-collector`.
+   Same as ping/pong, `config set-role` reboots immediately — no manual
+   power-cycle needed.
+5. Turn the pot. Watch `pot_sender.raw` (that board's own `metrics` CLI
+   output, or its LCD once the display's rotation reaches it) change as
+   you turn it, then watch the collector board's `pot_collector.raw`
+   track the same value a moment later — confirming the value actually
+   crossed the wire, not just a local read. `can sniff` from either
+   board's CLI shows the raw `0x130` frames independently of the app
+   logic.
+
+`pot_sender_role.c`'s ADC read isn't calibrated to millivolts — raw
+12-bit counts (`0`–`4095`) are enough to prove the read/broadcast/
+collect path works. Wiring in `esp_adc`'s calibration API to report a
+real voltage would be a reasonable next step; not done here.
+
 ## Future ideas
 
 Not implemented, no hardware ordered beyond what's already in the
 [Hardware](../../CLAUDE.md#hardware) section — rough next exercises for
 this lab, not full designs:
 
-- **Potentiometer reading** — one of the ESP32's ADC1 channels (stay off
-  ADC2's pins; per Espressif errata it can't be read at all while WiFi is
-  active, and even with WiFi off here, ADC1 is the simpler/less-caveated
-  choice), via `esp_adc`/`adc_oneshot`. The simplest possible analog-input
-  exercise, and a stand-in for any real setpoint pot before wiring
-  anything scooter-specific.
 - **Hall sensor throttle reading** — a twist-grip e-scooter throttle is
   usually a 3-wire *analog* Hall sensor (VCC/GND/signal, signal roughly
   0.8–4.2V proportional to twist) — not the pulse-counting Hall input
   [docs/reference-node.md](../../docs/reference-node.md) already
   describes for wheel-speed sensing (same sensor technology, different
   wiring/reading entirely: ADC read here vs. GPIO interrupt/pulse-count
-  there). Same ADC path as the potentiometer above; check the signal
-  range against the ESP32 ADC's ~3.3V max first (a 5V-railed throttle
-  needs a voltage divider). Broadcasting it as a real message would land
-  in [docs/can-message-spec.md](../../docs/can-message-spec.md)'s
-  Setpoints band (`0x040–0x07F`, "panel throttle/direction").
+  there). Same ADC path `pot_sender_role.c` already exercises (see
+  above); check the signal range against the ESP32 ADC's ~3.3V max
+  first (a 5V-railed throttle needs a voltage divider). Broadcasting it
+  as a real message would land in
+  [docs/can-message-spec.md](../../docs/can-message-spec.md)'s
+  Setpoints band (`0x040–0x07F`, "panel throttle/direction") rather than
+  `pot_sender_role.c`'s scratch `0x130`.
 - **DC motor control (4-wire)** — an H-bridge driver (direction + PWM
   speed, however that node's 4 wires end up split between motor leads
   and control signals depending on the driver chosen) commanded by a

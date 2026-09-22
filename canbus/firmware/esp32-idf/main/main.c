@@ -12,6 +12,8 @@
 #include "can.h"
 #include "ping_role.h"
 #include "pong_role.h"
+#include "pot_sender_role.h"
+#include "pot_collector_role.h"
 
 static const char *TAG = "main";
 
@@ -21,10 +23,10 @@ static const char *TAG = "main";
  * always brought up; which role this node plays is runtime/NVRAM-backed
  * (identity.c's role) rather than a compile-time choice, so it's decided
  * last, once, by the switch below -- the single place that dispatches to
- * launch_ping_role()/launch_pong_role(), each of which unconditionally
- * registers its metrics and starts its task once called. "config
- * set-role" reboots the board immediately (see identity.c) precisely
- * because this dispatch only ever happens here, at boot.
+ * one role's launch_*_role(), each of which unconditionally registers
+ * its metrics and starts its task once called. "config set-role"
+ * reboots the board immediately (see identity.c) precisely because this
+ * dispatch only ever happens here, at boot.
  */
 void app_main(void)
 {
@@ -65,11 +67,20 @@ void app_main(void)
 			ESP_LOGI(TAG, "role: pong");
 			launch_pong_role();
 			break;
+		case IDENTITY_ROLE_POT_SENDER:
+			ESP_LOGI(TAG, "role: pot-sender");
+			launch_pot_sender_role();
+			break;
+		case IDENTITY_ROLE_POT_COLLECTOR:
+			ESP_LOGI(TAG, "role: pot-collector");
+			launch_pot_collector_role();
+			break;
 		default:
 			ESP_LOGE(TAG, "role: unknown value %d -- no task started", (int)role);
 			break;
 		}
 	} else {
-		ESP_LOGE(TAG, "role: not configured -- run 'config set-role ping|pong'");
+		ESP_LOGE(TAG, "role: not configured -- run 'config set-role "
+			  "ping|pong|pot-sender|pot-collector'");
 	}
 }
