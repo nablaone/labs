@@ -1,10 +1,8 @@
 #include <inttypes.h>
 #include <stdint.h>
-#include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -15,16 +13,6 @@
 
 static const char *TAG = "pingpong";
 
-/* Mutex-protected, same pattern as state.c -- display_task's "ping" tab
- * reads this via pingpong_task_status_read() rather than this module
- * writing to the LCD itself. */
-static struct {
-	pingpong_status_t status;
-	uint32_t seq;
-	uint32_t rtt_ms;
-} pingpong_state;
-static SemaphoreHandle_t pingpong_mutex;
-
 static const char *status_name(pingpong_status_t status)
 {
 	switch (status) {
@@ -34,29 +22,14 @@ static const char *status_name(pingpong_status_t status)
 	}
 }
 
-/* Also mirrors every update into the pingpong.* metrics (see metrics.c)
- * -- released pingpong_mutex first rather than holding it while taking
- * metrics_mutex too, same as state.c's state_counter_increment(). */
+/* Publishes an exchange's outcome as the pingpong.* metrics (see
+ * metrics.c) -- that table is itself already mutex-protected, so this
+ * module doesn't need status state or a mutex of its own. */
 static void status_set(pingpong_status_t status, uint32_t seq, uint32_t rtt_ms)
 {
-	xSemaphoreTake(pingpong_mutex, portMAX_DELAY);
-	pingpong_state.status = status;
-	pingpong_state.seq = seq;
-	pingpong_state.rtt_ms = rtt_ms;
-	xSemaphoreGive(pingpong_mutex);
-
 	metrics_set_string("pingpong.status", status_name(status));
 	metrics_set_int("pingpong.seq", (int32_t)seq);
 	metrics_set_int("pingpong.rtt_ms", (int32_t)rtt_ms);
-}
-
-void pingpong_task_status_read(pingpong_status_t *status, uint32_t *seq, uint32_t *rtt_ms)
-{
-	xSemaphoreTake(pingpong_mutex, portMAX_DELAY);
-	*status = pingpong_state.status;
-	*seq = pingpong_state.seq;
-	*rtt_ms = pingpong_state.rtt_ms;
-	xSemaphoreGive(pingpong_mutex);
 }
 
 /* Scratch IDs in the unallocated gap (0x100-0x6FF) --
@@ -66,7 +39,6 @@ void pingpong_task_status_read(pingpong_status_t *status, uint32_t *seq, uint32_
 
 static void pingpong_shared_init(void)
 {
-	pingpong_mutex = xSemaphoreCreateMutex();
 	metrics_register_string("pingpong.status", status_name(PINGPONG_STATUS_NONE));
 	metrics_register_int("pingpong.seq", 0);
 	metrics_register_int("pingpong.rtt_ms", 0);
@@ -92,7 +64,7 @@ static uint32_t decode_seq(const twai_message_t *msg)
  * any other frame seen in that window (including a stale PONG replying
  * to an earlier, already-timed-out ping) is drained and ignored rather
  * than treated as a wrong answer -- and logs/publishes the round trip
- * for display_task's "ping" tab (see pingpong_task_status_read()). */
+ * via status_set(). */
 static void do_ping(uint32_t seq)
 {
 	int64_t sent_us = esp_timer_get_time();

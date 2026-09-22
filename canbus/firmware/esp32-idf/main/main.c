@@ -10,14 +10,13 @@
 #include "heartbeat_task.h"
 #include "display_task.h"
 #include "can.h"
-#include "lcd_task.h"
 #include "pingpong_task.h"
 
 static const char *TAG = "main";
 
 /*
  * Orchestration only -- each module owns its own init/task-loop/CLI-
- * registration. Common hardware (heartbeat+LED, display, LCD, CAN) is
+ * registration. Common hardware (heartbeat+LED, display/LCD, CAN) is
  * always brought up; which role this node plays is runtime/NVRAM-backed
  * (identity.c's role) rather than a compile-time choice, so it's decided
  * last, once, via the switch below -- "config set-role" reboots the
@@ -38,16 +37,12 @@ void app_main(void)
 
 	heartbeat_task_init();
 	display_task_init();
-	lcd_task_init();
 
 	ESP_LOGI(TAG, "CAN self-test: %s", can_run_selftest() ? "PASS" : "FAIL");
 	can_register_cli_commands();
 
-	lcd_task_register_cli_commands();
-
 	xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 5, NULL);
 	xTaskCreate(display_task, "display", 3072, NULL, 5, NULL);
-	xTaskCreate(lcd_task, "lcd", 3072, NULL, 5, NULL);
 	xTaskCreate(can_rx_task, "can_rx", 3072, NULL, 5, NULL);
 
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);

@@ -42,22 +42,19 @@ exist are meant to change per node.
   `_init()`) and `metrics_set_*()` it as it runs; dotted, module-prefixed
   keys (`"identity.role"`) avoid collisions where a name isn't already
   unambiguous on its own (`counter`, `version`). Owns the `metrics` CLI
-  command, which dumps the whole table — the only consumer, so there's no
-  public read/getter API. `main.c` calls `metrics_init()` **first**, before
-  `state_init()`/`identity_init()`, since both of those register a metric
-  from their own `_init()` and need the registry's mutex to already exist.
-  Keys registered so far: `main.c` registers `version` (`FIRMWARE_VERSION`,
+  command, which dumps the whole table; `metrics_count()`/`metrics_get()`
+  are the other consumer — `display_task` walks the table through these
+  to show every registered metric on the physical LCD, one at a time.
+  `main.c` calls `metrics_init()` **first**, before `state_init()`/
+  `identity_init()`, since both of those register a metric from their own
+  `_init()` and need the registry's mutex to already exist. Keys
+  registered so far: `main.c` registers `version` (`FIRMWARE_VERSION`,
   set once, never changes); `state.c` registers/updates `counter`;
   `identity.c` registers `identity.role` in `identity_init()` (`"unset"`
   until configured) and updates it in `identity_role_set()`;
   `pingpong_task.c` registers `pingpong.status`/`pingpong.seq`/
   `pingpong.rtt_ms` in `ping_task_init()`/`pong_task_init()` and updates
-  all three together from `status_set()`, the same single place that
-  updates the mutex-protected snapshot `pingpong_task_status_read()`
-  serves. `display_task`'s LCD tabs keep reading that getter directly
-  rather than the metrics table, since that's a different, latency-
-  sensitive consumer this registry isn't meant to
-  replace.
+  all three together from `status_set()`.
 - **`heartbeat_task.c`/`.h`** — ticks every `HB_MS_PER_TICK` (100ms);
   increments the counter once every 5 ticks (500ms), and separately
   toggles the LED whenever a read-back shows the counter actually
@@ -67,30 +64,45 @@ exist are meant to change per node.
   separate tasks (`led_task` polling the counter every 100ms,
   `heartbeat_task` ticking it on its own via a `rate`-settable period)
   folded into one after `button_task` was removed.
-- **`display_task.c`/`.h`** — the *only* module that calls `lcd_display()`
-  (see below) — every other module publishes its own state through a
-  small getter (`state_counter_read()`, `pingpong_task_status_read()`,
-  ...) and this task is the sole place that reads those and formats them
-  for the physical display, one rotating "tab" per `DISPLAY_CYCLE_MS`
-  (2s): `version` (`FIRMWARE_VERSION`), `counter` (the excitement
-  counter), a static `hello`/`world`, and (if `NODE_ENABLE_PINGPONG`) a
-  `ping` tab reading `identity_role_read()`/`identity_node_id_read()`
-  and `pingpong_task_status_read()` — `"<ping|pong> id<N>"` on line 1,
-  the latest exchange's outcome on line 2 (`"seq3 12ms"` /
-  `"seq3 timeout"` / `"seq3 replied"` / `"unconfigured"`). Each tab is
-  logged too. Only the counter's turn also broadcasts over CAN (if
-  enabled): 4 bytes, little-endian, on ID `0x7F0`. Deliberately a high
-  11-bit ID — CAN arbitration is lowest-ID-wins, so this is the
-  *lowest*-priority traffic on the bus, as fits a non-critical periodic
-  debug broadcast. Sits in
-  [../../docs/can-message-spec.md](../../docs/can-message-spec.md)'s
-  diagnostics band (`0x700`–`0x7FF`) but away from that doc's `0x7NN`
-  `NODE_HEARTBEAT` pattern — this is an experimental broadcast, not a
-  registered message.
+- **`display_task.c`/`.h`** — drives a 16x2 HD44780 character LCD over a
+  PCF8574 I2C backpack, and decides what goes on it: combines what used
+  to be two separate modules (`lcd_task`, the I2C/HD44780 driver;
+  `display_task`, per-module "tabs" it rendered) into one. Its whole job
+  now is `metrics.c`'s table — every `DISPLAY_METRIC_MS` (1s) it shows
+  the next registered metric, key on line 1 / value on line 2, wrapping
+  back to the first once it's cycled through all of them
+  (`metrics_count()` is re-checked every cycle, so a metric registered
+  after boot, e.g. `pingpong.*` once a role is configured, joins the
+  rotation on its own). Nothing else — no CLI command to push arbitrary
+  text, no CAN broadcast, no per-module special-casing; a module that
+  wants something shown just registers a metric, and this task doesn't
+  know or care which module that was. `display_task_init()` brings up
+  the I2C bus/device and, if a real write to `LCD_I2C_ADDR` succeeds
+  (`pcf8574_write()`, retried a few times — this bus is marginal, see
+  below), runs `hd44780_init_sequence()`; if it doesn't, `display_task()`
+  deletes itself at startup rather than looping forever against
+  nonexistent hardware, and the rest of the node still boots/runs.
+  `i2c_master_probe()` was found on real hardware to report "no
+  response" for every address even with a confirmed-good, confirmed-
+  wired backpack attached (independently verified alive at the same
+  address via a Raspberry Pi's `i2cdetect`) — unreliable as a presence
+  check here, which is why a real write decides presence instead. That
+  bus also turned out to be marginal on real writes (occasional genuine
+  `I2C software timeout`), confirmed to be weak pull-ups (only the
+  ESP32's internal ~45kΩ ones were engaged) — adding real external
+  pull-up resistors cut the failure rate drastically; standard
+  100kHz/`glitch_ignore_cnt=7` settings, with the pull-ups, produce
+  noticeably *fewer* failures than an earlier attempt at a slower clock
+  + higher glitch tolerance did without them. `pcf8574_write()` still
+  retries each byte a few times with a short gap between attempts as a
+  safety net (the failure rate didn't reach zero), and
+  `hd44780_init_sequence()` explicitly space-fills both rows on top of
+  the normal HD44780 clear command, rather than trusting a single clear
+  to leave a clean screen on a bus that can still glitch.
 - **`can.c`/`.h`** — TWAI driver + self-test + send/sniff, plus
   `can_send(id, data, len)` and the `can_send_u32(id, value)` convenience
   wrapper (little-endian 32-bit payload) other modules call directly
-  (`display_task` uses it for its counter broadcast). Also
+  (`ping_task`/`pong_task` use it for `PING`/`PONG` frames). Also
   owns `can_rx_task` — the sole reader of `twai_receive()` once running,
   fanning every frame out to one software queue that `can_receive()`
   drains from. The `can sniff` CLI command and whichever of
@@ -111,41 +123,13 @@ exist are meant to change per node.
   `main.c`'s switch on `identity.h`'s runtime `role` — neither task
   re-checks it itself, so `config set-role` (see below) reboots the board
   immediately rather than switching roles live. Requires `NODE_ENABLE_CAN`.
-  Doesn't touch the LCD itself — publishes the latest exchange
-  (status/seq/rtt) through the mutex-protected `pingpong_task_status_read()`
-  (set up by whichever of `ping_task_init()`/`pong_task_init()` `main.c`
-  called for the role that started — both just create the same shared
-  mutex, so either is enough), the same
-  "own module publishes, one place renders" shape `state.c` already uses
-  for the counter; `display_task`'s `ping` tab (above) is what actually
-  shows it.
-- **`lcd_task.c`/`.h`** — drives a 16x2 HD44780 character LCD over a
-  PCF8574 I2C backpack. Exposes `lcd_display(line1, line2)` for other
-  modules to call directly (mutex-protected, non-blocking — it only
-  updates in-memory state and returns; the actual I2C write happens
-  asynchronously off `lcd_task`'s own loop, which wakes every
-  `LCD_UPDATE_MS` and only touches the display if the content actually
-  changed since the last write). `lcd_task_init()` scans the whole
-  7-bit I2C address range at boot and logs what it finds — a bring-up
-  aid for backpacks that don't ship at the expected `LCD_I2C_ADDR` —
-  but that scan is informational only. `i2c_master_probe()` (the
-  scan's underlying call) was found on real hardware to report "no
-  response" for every address, including a confirmed-good, confirmed-
-  wired backpack independently verified alive at the same address via
-  a Raspberry Pi's `i2cdetect` — so presence is decided by a real
-  `i2c_master_transmit()` write instead. That bus also turned out to be
-  marginal on real writes (occasional genuine `I2C software timeout`),
-  confirmed to be weak pull-ups (only the ESP32's internal ~45kΩ ones
-  were engaged) once adding real external pull-up resistors cut the
-  failure rate drastically — standard 100kHz/`glitch_ignore_cnt=7`
-  settings, with the pull-ups, produce noticeably *fewer* failures than
-  an earlier attempt at a slower clock + higher glitch tolerance did
-  without them, so that wasn't a useful mitigation on its own.
-  `pcf8574_write()` still retries each byte a few times with a short
-  gap between attempts as a safety net (the failure rate didn't reach
-  zero), and `hd44780_init_sequence()` explicitly space-fills both rows
-  on top of the normal HD44780 clear command, rather than trusting a
-  single clear to leave a clean screen on a bus that can still glitch.
+  Doesn't touch the LCD itself — publishes the latest exchange as the
+  `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms` metrics (registered
+  by whichever of `ping_task_init()`/`pong_task_init()` `main.c` called
+  for the role that started, updated by `status_set()`). No status state
+  or mutex of its own — `metrics.c`'s table is already mutex-protected,
+  so there's nothing left for this module to own once `display_task`
+  reads that table generically instead of a per-module getter.
 - **`identity.c`/`.h`** — per-unit runtime identity (`node_id`, `role`),
   stored in NVS rather than `node_config.h` since the goal is one shared
   binary flashed to every board, differentiated only by what's set over
@@ -188,8 +172,6 @@ Enter. Commands (registered by the module that owns each one):
   fixed 30s, then return.
 - **`can send <id_hex>#<data_hex>`** — transmit one frame, e.g.
   `can send 123#DEADBEEF`.
-- **`lcd <line1> <line2>`** — show text on the LCD (16 chars/line,
-  space-padded), e.g. `lcd hello world`.
 - **`exit`** — leave CLI mode, resume logging.
 
 The driver comes up in `TWAI_MODE_NORMAL` at boot (GPIO21/22, 500 kbit/s)
@@ -238,7 +220,7 @@ Full wiring table, termination, and bring-up sequence:
 
 The LCD needs a PCF8574 I2C backpack wired in — GPIO26 (SDA) / GPIO27
 (SCL), address `0x27` by default (some backpacks ship at `0x3F` —
-`LCD_I2C_ADDR` in `node_config.h` if yours differs). `lcd_task_init()`
+`LCD_I2C_ADDR` in `node_config.h` if yours differs). `display_task_init()`
 logs a (non-fatal) warning at boot if a real write to that address
 fails, so the rest of the node still comes up fine before the LCD is
 wired.
@@ -274,8 +256,11 @@ before flashing/provisioning rather than assuming:
    `esp_restart()`) so `main.c`'s boot-time switch picks up the new role
    right away — no manual power-cycle needed, but do set the id first on
    each board since the role change ends the CLI session.
-5. Watch the logs (or LCDs, if wired): board A logs `seq=N rtt=Xms` once
-   a second; board B logs `seq=N replied` as it echoes each one back.
+5. Watch the logs (or LCDs, if wired — the `pingpong.*` metrics take
+   their turn in the display's rotation alongside `version`/`counter`/
+   `identity.role`, once per `DISPLAY_METRIC_MS`): board A logs
+   `seq=N rtt=Xms` once a second; board B logs `seq=N replied` as it
+   echoes each one back.
    `can sniff` from either board's CLI (or `cantool.py sniff` from the
    Mac) confirms the frames on the wire independently of the app logic —
    but see `can.c`'s note above about it competing with whichever of

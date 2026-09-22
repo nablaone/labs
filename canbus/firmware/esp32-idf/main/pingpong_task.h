@@ -1,5 +1,4 @@
 #pragma once
-#include <stdint.h>
 
 /*
  * Two-node bring-up exercise: a request/response frame pair over the
@@ -13,11 +12,11 @@
  * Requires NODE_ENABLE_CAN.
  *
  * This module only touches CAN + its own status snapshot below -- it
- * does not call lcd_display() itself. display_task owns the display (all
- * of it, one rotating "tab" per module with something to show); a "ping"
- * tab there reads pingpong_task_status_read() and formats it, the same
- * way display_task already reads state_counter_read() for its own
- * "counter" tab rather than state.c writing to the LCD directly.
+ * never touches the LCD itself. display_task doesn't know this module
+ * exists either: it just cycles through every metrics.c entry, and this
+ * module's pingpong.status/pingpong.seq/pingpong.rtt_ms (registered in
+ * ping_task_init()/pong_task_init(), updated in status_set()) are three
+ * of those entries, same as any other module's.
  */
 
 typedef enum {
@@ -27,11 +26,10 @@ typedef enum {
 } pingpong_status_t;
 
 /* Sends a PING every PING_PERIOD_MS and waits for the matching PONG.
- * ping_task_init() sets up the shared status mutex below and registers
- * the pingpong.status/pingpong.seq/pingpong.rtt_ms metrics (see
- * metrics.c) -- call whichever of this or pong_task_init() matches the
- * task main.c is about to start; either one is enough, both do the same
- * thing. */
+ * ping_task_init() registers the pingpong.status/pingpong.seq/
+ * pingpong.rtt_ms metrics (see metrics.c) -- call whichever of this or
+ * pong_task_init() matches the task main.c is about to start; either one
+ * is enough, both do the same thing. */
 void ping_task_init(void);
 void ping_task(void *arg);
 
@@ -39,10 +37,3 @@ void ping_task(void *arg);
  * counterpart -- see above. */
 void pong_task_init(void);
 void pong_task(void *arg);
-
-/* Mutex-protected snapshot of the most recent exchange -- rtt_ms is only
- * meaningful when status is PINGPONG_STATUS_OK and this node is currently
- * playing the ping role (0 otherwise, e.g. a pong reply has no round trip
- * of its own to report). Same data also published as the pingpong.status/
- * pingpong.seq/pingpong.rtt_ms metrics, for the "metrics" CLI command. */
-void pingpong_task_status_read(pingpong_status_t *status, uint32_t *seq, uint32_t *rtt_ms);

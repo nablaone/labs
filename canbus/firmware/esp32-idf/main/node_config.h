@@ -14,9 +14,7 @@
 #include "driver/gpio.h"
 
 #define NODE_ENABLE_HEARTBEAT 1
-#define NODE_ENABLE_DISPLAY   1
 #define NODE_ENABLE_CAN       1
-#define NODE_ENABLE_LCD       1
 /* Requires NODE_ENABLE_CAN -- see pingpong_task.c. */
 #define NODE_ENABLE_PINGPONG  1
 
@@ -24,8 +22,8 @@
  * padded single-digit days) -- auto-updates every build so it can't go
  * stale the way a hand-maintained date would, useful for telling boards
  * apart during bring-up when it's not obvious which one has the latest
- * flash (the "version" CLI command and display_task's "version" tab both
- * show this). */
+ * flash (the "version" CLI command and the "version" metric -- see
+ * metrics.c -- both show this). */
 #define FIRMWARE_VERSION "0.2.0 (" __DATE__ ")"
 
 /*
@@ -59,7 +57,7 @@
  * GPIO26/27 during bring-up while chasing a "no response at all" bus
  * result. That turned out to be a red herring -- GPIO26/27 showed the
  * exact same symptom, and the real cause (a marginal bus needing
- * retries -- see lcd_task.c's pcf8574_write()) was pin-independent.
+ * retries -- see display_task.c's pcf8574_write()) was pin-independent.
  * Left on 26/27 since that's what ended up wired/verified; no
  * functional reason to move back.
  */
@@ -67,8 +65,9 @@
 #define I2C_SCL_GPIO GPIO_NUM_27
 #define LCD_I2C_ADDR 0x27
 
-#define DISPLAY_CYCLE_MS 2000
-#define LCD_UPDATE_MS    200
+/* display_task: how long each registered metric stays on screen before
+ * cycling to the next one. See metrics.c/display_task.c. */
+#define DISPLAY_METRIC_MS 1000
 
 /* ping_task/pong_task: PING_PERIOD_MS is ping_task's period between
  * pings; PING_TIMEOUT_MS is how long ping_task waits for the matching

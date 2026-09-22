@@ -25,7 +25,7 @@ typedef struct {
 } metric_t;
 
 static metric_t metrics[METRICS_MAX];
-static size_t metrics_count;
+static size_t num_metrics;
 static SemaphoreHandle_t metrics_mutex;
 
 void metrics_init(void)
@@ -38,7 +38,7 @@ void metrics_init(void)
  * fancier is worth it. Caller holds metrics_mutex. */
 static metric_t *find(const char *key)
 {
-	for (size_t i = 0; i < metrics_count; i++) {
+	for (size_t i = 0; i < num_metrics; i++) {
 		if (strcmp(metrics[i].key, key) == 0) {
 			return &metrics[i];
 		}
@@ -50,11 +50,11 @@ static metric_t *find(const char *key)
  * NULL (having logged why) if the table is full. */
 static metric_t *add_slot(const char *key, metric_type_t type)
 {
-	if (metrics_count == METRICS_MAX) {
+	if (num_metrics == METRICS_MAX) {
 		ESP_LOGE(TAG, "table full (%d) -- '%s' not registered", METRICS_MAX, key);
 		return NULL;
 	}
-	metric_t *m = &metrics[metrics_count++];
+	metric_t *m = &metrics[num_metrics++];
 	m->key = key;
 	m->type = type;
 	return m;
@@ -172,20 +172,34 @@ void metrics_set_string(const char *key, const char *value)
 	xSemaphoreGive(metrics_mutex);
 }
 
-static void print_metric(const metric_t *m)
+static const char *type_name(metric_type_t type)
+{
+	switch (type) {
+	case METRIC_TYPE_BOOL:   return "bool";
+	case METRIC_TYPE_INT:    return "int";
+	case METRIC_TYPE_FLOAT:  return "float";
+	case METRIC_TYPE_STRING: return "string";
+	default:                 return "?";
+	}
+}
+
+/* Shared by cmd_metrics() and metrics_get() so there's exactly one place
+ * that knows how to turn each value type into text. Caller holds
+ * metrics_mutex. */
+static void format_value(const metric_t *m, char *out, size_t out_len)
 {
 	switch (m->type) {
 	case METRIC_TYPE_BOOL:
-		printf("%-20s bool    %s\n", m->key, m->value.b ? "true" : "false");
+		snprintf(out, out_len, "%s", m->value.b ? "true" : "false");
 		break;
 	case METRIC_TYPE_INT:
-		printf("%-20s int     %" PRId32 "\n", m->key, m->value.i);
+		snprintf(out, out_len, "%" PRId32, m->value.i);
 		break;
 	case METRIC_TYPE_FLOAT:
-		printf("%-20s float   %g\n", m->key, m->value.f);
+		snprintf(out, out_len, "%g", m->value.f);
 		break;
 	case METRIC_TYPE_STRING:
-		printf("%-20s string  %s\n", m->key, m->value.s);
+		snprintf(out, out_len, "%s", m->value.s);
 		break;
 	}
 }
@@ -193,12 +207,14 @@ static void print_metric(const metric_t *m)
 static int cmd_metrics(int argc, char **argv)
 {
 	xSemaphoreTake(metrics_mutex, portMAX_DELAY);
-	if (metrics_count == 0) {
+	if (num_metrics == 0) {
 		printf("(no metrics registered)\n");
 	} else {
 		printf("%-20s %-7s %s\n", "key", "type", "value");
-		for (size_t i = 0; i < metrics_count; i++) {
-			print_metric(&metrics[i]);
+		for (size_t i = 0; i < num_metrics; i++) {
+			char value[32];
+			format_value(&metrics[i], value, sizeof(value));
+			printf("%-20s %-7s %s\n", metrics[i].key, type_name(metrics[i].type), value);
 		}
 	}
 	xSemaphoreGive(metrics_mutex);
@@ -213,4 +229,26 @@ void metrics_register_cli_commands(void)
 		.func = &cmd_metrics,
 	};
 	ESP_ERROR_CHECK(esp_console_cmd_register(&metrics_cmd));
+}
+
+size_t metrics_count(void)
+{
+	xSemaphoreTake(metrics_mutex, portMAX_DELAY);
+	size_t count = num_metrics;
+	xSemaphoreGive(metrics_mutex);
+	return count;
+}
+
+bool metrics_get(size_t idx, char *key_out, size_t key_out_len,
+		  char *value_out, size_t value_out_len)
+{
+	xSemaphoreTake(metrics_mutex, portMAX_DELAY);
+	if (idx >= num_metrics) {
+		xSemaphoreGive(metrics_mutex);
+		return false;
+	}
+	snprintf(key_out, key_out_len, "%s", metrics[idx].key);
+	format_value(&metrics[idx], value_out, value_out_len);
+	xSemaphoreGive(metrics_mutex);
+	return true;
 }

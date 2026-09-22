@@ -1,28 +1,23 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /*
  * Generic key -> typed-value status/metrics registry, mutex-protected
  * since modules register/update from tasks that may run on either of the
  * ESP32's two cores. Each subsystem registers its own metrics once
- * (typically from its own _init()) and updates them as it runs; the
- * "metrics" CLI command (registered here) is the only consumer -- it
- * dumps the whole table, so no public read/getter API is needed.
+ * (typically from its own _init()) and updates them as it runs. Two
+ * consumers read it back: the "metrics" CLI command (registered here),
+ * and display_task, which cycles the physical LCD through every
+ * registered entry -- metrics_count()/metrics_get() below exist for a
+ * consumer like that; nothing else needs them.
  *
  * Keys are not copied -- every caller is expected to pass a string
  * literal (static duration), e.g. "heartbeat.ticks", dotted and
  * module-prefixed to avoid collisions between modules. String *values*
  * are copied (truncated to METRIC_STRING_MAX-1) since those often come
  * from a caller's local buffer that goes out of scope.
- *
- * Phase 1 (this module): the registry + CLI command only, nothing else
- * wired to it yet. Migrating existing per-module getters (state.c's
- * counter, identity.c's role/node_id, pingpong_task's status/seq/rtt) to
- * also publish here is a deliberately separate follow-up, not part of
- * this change -- display_task's LCD tabs keep reading those directly,
- * since that's a different, latency-sensitive consumer this registry
- * isn't meant to replace.
  */
 
 #define METRIC_STRING_MAX 20
@@ -54,3 +49,17 @@ void metrics_set_string(const char *key, const char *value);
 
 /* Registers the "metrics" CLI command. */
 void metrics_register_cli_commands(void);
+
+/* Number of currently registered metrics -- valid indices for
+ * metrics_get() below are [0, metrics_count()). Can grow between calls
+ * (a module registering a new key later, e.g. pingpong_task's metrics
+ * only appear once this board's role is configured) -- callers that walk
+ * the table on a timer, like display_task, should re-check it each pass
+ * rather than caching it once. */
+size_t metrics_count(void);
+
+/* Copies the key and a human-readable value string for slot idx into the
+ * caller's buffers (each null-terminated, truncated to fit). Returns
+ * false (leaving the buffers untouched) if idx is out of range. */
+bool metrics_get(size_t idx, char *key_out, size_t key_out_len,
+		  char *value_out, size_t value_out_len);
