@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c" "state.c" "led_task.c" "heartbeat_task.c" "button_task.c"
+    SRCS "main.c" "state.c" "heartbeat_task.c"
          "display_task.c" "can.c" "console.c" "lcd_task.c" "identity.c"
          "pingpong_task.c"
     INCLUDE_DIRS "."

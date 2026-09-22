@@ -91,10 +91,10 @@ void display_task(void *arg)
 
 #if NODE_ENABLE_PINGPONG
 		case DISPLAY_PARAM_PING: {
-			identity_mode_t mode;
+			identity_role_t role;
 			char line1[24], line2[24];
 
-			if (!identity_mode_read(&mode)) {
+			if (!identity_role_read(&role)) {
 				snprintf(line1, sizeof(line1), "unconfigured");
 				snprintf(line2, sizeof(line2), "run: config set");
 			} else {
@@ -106,14 +106,14 @@ void display_task(void *arg)
 					snprintf(id_str, sizeof(id_str), "?");
 				}
 				snprintf(line1, sizeof(line1), "%s id%s",
-					  mode == IDENTITY_MODE_PING ? "ping" : "pong", id_str);
+					  role == IDENTITY_ROLE_PING ? "ping" : "pong", id_str);
 
 				pingpong_status_t status;
 				uint32_t seq, rtt_ms;
 				pingpong_task_status_read(&status, &seq, &rtt_ms);
 				switch (status) {
 				case PINGPONG_STATUS_OK:
-					if (mode == IDENTITY_MODE_PING) {
+					if (role == IDENTITY_ROLE_PING) {
 						snprintf(line2, sizeof(line2), "seq%" PRIu32 " %" PRIu32 "ms",
 							  seq, rtt_ms);
 					} else {

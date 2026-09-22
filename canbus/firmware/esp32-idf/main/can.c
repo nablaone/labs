@@ -99,9 +99,7 @@ static void can_log_status(void)
 
 /* twai_transmit()'s timeout is how long to wait for room in the driver's
  * TX queue, not for the frame to actually be ACKed on the bus (that's
- * the CAN controller's own job, invisible to this call either way).
- * can_send() waits up to 1s for queue space; can_send_nowait() (0
- * timeout) fails immediately instead if the queue's already full. */
+ * the CAN controller's own job, invisible to this call either way). */
 static bool can_send_impl(uint32_t id, const uint8_t *data, size_t len, TickType_t timeout)
 {
 	if (len > 8) {
@@ -130,11 +128,6 @@ bool can_send(uint32_t id, const uint8_t *data, size_t len)
 	return can_send_impl(id, data, len, pdMS_TO_TICKS(1000));
 }
 
-bool can_send_nowait(uint32_t id, const uint8_t *data, size_t len)
-{
-	return can_send_impl(id, data, len, 0);
-}
-
 static void encode_u32(uint8_t data[4], uint32_t value)
 {
 	data[0] = (uint8_t)(value & 0xFF);
@@ -148,13 +141,6 @@ bool can_send_u32(uint32_t id, uint32_t value)
 	uint8_t data[4];
 	encode_u32(data, value);
 	return can_send(id, data, sizeof(data));
-}
-
-bool can_send_u32_nowait(uint32_t id, uint32_t value)
-{
-	uint8_t data[4];
-	encode_u32(data, value);
-	return can_send_nowait(id, data, sizeof(data));
 }
 
 /* Transmits one frame and expects it back via the transceiver's own
@@ -347,8 +333,7 @@ void can_register_cli_commands(void)
 /* The queue is created by can_run_selftest()/can_reinit() -- called at
  * boot before this task is ever started, so it's always non-NULL here in
  * practice. Blocks forever per iteration; nothing to time out for, since
- * there's no per-iteration state to re-check (unlike pingpong_task, which
- * re-reads identity_mode_read() and so needs a bounded wait). */
+ * there's no per-iteration state to re-check. */
 void can_rx_task(void *arg)
 {
 	while (1) {

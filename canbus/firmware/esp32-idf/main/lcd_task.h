@@ -4,7 +4,7 @@
  * HD44780 character LCD over a PCF8574 I2C backpack (16x2). Like can.c,
  * this is "hardware code" other modules reach into directly rather than
  * a self-contained task -- lcd_display() is the public entry point
- * every other module calls (button_task, display_task, etc.) to put
+ * other modules call (display_task, currently the only one) to put
  * text on the physical display without touching I2C themselves.
  */
 

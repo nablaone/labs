@@ -29,25 +29,13 @@ bool can_run_selftest(void);
  * caller doesn't need its own error handling beyond checking the result.
  * Shared by the "can send" CLI command and other modules that want to
  * put something on the bus (e.g. display_task's periodic counter
- * broadcast, button_task's press-event broadcast). */
+ * broadcast). */
 bool can_send(uint32_t id, const uint8_t *data, size_t len);
 
 /* Convenience wrapper for the common case of a single little-endian
  * 32-bit value payload (../../../docs/can-message-spec.md's stated byte
  * convention) -- e.g. broadcasting the excitement counter. */
 bool can_send_u32(uint32_t id, uint32_t value);
-
-/* Like can_send()/can_send_u32(), but returns immediately (0 timeout on
- * twai_transmit()) instead of waiting up to 1s for room in the driver's
- * TX queue. Note this is about queue space, not the frame's bus-level
- * ACK -- the CAN controller itself decides ACK/retry behavior regardless
- * of which of these a caller uses; this only controls whether *this*
- * call blocks if the queue's already backed up. Use for a caller that
- * fires often (button_task's press-event broadcast, once per 100ms poll
- * while held) and shouldn't stall its own loop if the bus is congested
- * or has no listener. */
-bool can_send_nowait(uint32_t id, const uint8_t *data, size_t len);
-bool can_send_u32_nowait(uint32_t id, uint32_t value);
 
 /* Registers the "can" CLI command (loop/xcvr/sniff/send subcommands). */
 void can_register_cli_commands(void);

@@ -3,7 +3,7 @@
 /* esp_console/linenoise setup plus the built-in "help"/"version"/"exit"
  * commands, common to every node -- this is "the same debug strategy"
  * every node's firmware shares. Other modules register their own
- * commands (state's "counter", heartbeat_task's "rate", can's "can")
+ * commands (state's "counter", can's "can", identity's "config")
  * after this returns. */
 void console_init(void);
 

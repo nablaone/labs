@@ -74,8 +74,8 @@ nvs-%.bin: nvs-%.csv image
 	docker run --rm -v $(APP_DIR):/app -w /app $(IMAGE) \
 		python3 $(NVS_PARTITION_GEN) generate $< $@ $(NVS_SIZE)
 
-# make nvs-flash-a PORT=/dev/tty.usbserial-XXXX -- board A: node_id=0, mode=ping
-# make nvs-flash-b PORT=/dev/tty.usbserial-XXXX -- board B: node_id=1, mode=pong
+# make nvs-flash-a PORT=/dev/tty.usbserial-XXXX -- board A: node_id=0, role=ping
+# make nvs-flash-b PORT=/dev/tty.usbserial-XXXX -- board B: node_id=1, role=pong
 # Native esptool, same reasoning as `flash` above. Writes straight to the
 # NVS partition offset, replacing the *whole* partition -- fine here,
 # `identity` is the only thing this app keeps in NVS. Verify afterward

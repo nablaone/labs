@@ -13,9 +13,7 @@
 
 #include "driver/gpio.h"
 
-#define NODE_ENABLE_LED       1
 #define NODE_ENABLE_HEARTBEAT 1
-#define NODE_ENABLE_BUTTON    1
 #define NODE_ENABLE_DISPLAY   1
 #define NODE_ENABLE_CAN       1
 #define NODE_ENABLE_LCD       1
@@ -31,18 +29,15 @@
 #define FIRMWARE_VERSION "0.2.0 (" __DATE__ ")"
 
 /*
- * LED on GPIO2 (onboard LED) and button on GPIO0 (onboard BOOT button) --
- * both onboard, no breadboard wiring needed. Both are strapping pins
- * (sampled at boot to select flash/boot mode), which is why the earlier
- * Zephyr app avoided them in favor of an external button on GPIO33 -- but
- * once the app is running, GPIO0 reads like any other input (it's only
- * sampled at reset), and the onboard LED's light loading on GPIO2 doesn't
- * disturb boot-mode sensing in practice (confirmed on real hardware). The
- * board already has an external pull-up on GPIO0 for its BOOT button;
- * button_task_init()'s gpio_pullup_en() just reinforces it.
+ * LED on GPIO2 (onboard LED, driven by heartbeat_task as a visual pulse)
+ * -- onboard, no breadboard wiring needed. A strapping pin (sampled at
+ * boot to select flash/boot mode), but its light loading doesn't disturb
+ * boot-mode sensing in practice (confirmed on real hardware).
+ *
+ * GPIO0 (onboard BOOT button) is unused by firmware now that button_task
+ * is gone -- free for something else later.
  */
-#define LED_GPIO    GPIO_NUM_2
-#define BUTTON_GPIO GPIO_NUM_0
+#define LED_GPIO GPIO_NUM_2
 
 /*
  * TWAI (CAN) TX/RX to the SN65HVD230 transceiver -- see
@@ -72,14 +67,12 @@
 #define I2C_SCL_GPIO GPIO_NUM_27
 #define LCD_I2C_ADDR 0x27
 
-#define POLL_MS          100
-#define HEARTBEAT_MS     1000
 #define DISPLAY_CYCLE_MS 2000
 #define LCD_UPDATE_MS    200
 
-/* pingpong_task: period between pings (mode=ping) and how long either
- * side waits for the next frame before re-checking identity_mode_read()
- * (mode=pong's per-receive wait; mode=ping's per-reply wait after
- * sending). See pingpong_task.c. */
+/* ping_task/pong_task: PING_PERIOD_MS is ping_task's period between
+ * pings; PING_TIMEOUT_MS is how long ping_task waits for the matching
+ * PONG before logging a timeout. pong_task blocks indefinitely instead
+ * of polling, so it doesn't use either. See pingpong_task.c. */
 #define PING_PERIOD_MS  1000
 #define PING_TIMEOUT_MS 300

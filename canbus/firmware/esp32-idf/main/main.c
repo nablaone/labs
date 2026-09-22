@@ -2,39 +2,25 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
-#include "node_config.h"
 #include "state.h"
 #include "console.h"
 #include "identity.h"
-#if NODE_ENABLE_LED
-#include "led_task.h"
-#endif
-#if NODE_ENABLE_HEARTBEAT
 #include "heartbeat_task.h"
-#endif
-#if NODE_ENABLE_BUTTON
-#include "button_task.h"
-#endif
-#if NODE_ENABLE_DISPLAY
 #include "display_task.h"
-#endif
-#if NODE_ENABLE_CAN
 #include "can.h"
-#endif
-#if NODE_ENABLE_LCD
 #include "lcd_task.h"
-#endif
-#if NODE_ENABLE_PINGPONG
 #include "pingpong_task.h"
-#endif
 
 static const char *TAG = "main";
 
 /*
  * Orchestration only -- each module owns its own init/task-loop/CLI-
- * registration (see node_config.h for the enable flags and pin
- * assignments a new node edits). Keeps this file identical across nodes;
- * only node_config.h and which modules exist need to change.
+ * registration. Common hardware (heartbeat+LED, display, LCD, CAN) is
+ * always brought up; which role this node plays is runtime/NVRAM-backed
+ * (identity.c's role) rather than a compile-time choice, so it's decided
+ * last, once, via the switch below -- "config set-role" reboots the
+ * board immediately (see identity.c) precisely because this decision is
+ * only ever made here, at boot.
  */
 void app_main(void)
 {
@@ -42,60 +28,48 @@ void app_main(void)
 	identity_init();
 	console_init();
 
-#if NODE_ENABLE_LED
-	led_task_init();
-#endif
-#if NODE_ENABLE_HEARTBEAT
-	heartbeat_task_init();
-#endif
-#if NODE_ENABLE_BUTTON
-	button_task_init();
-#endif
-#if NODE_ENABLE_DISPLAY
-	display_task_init();
-#endif
-#if NODE_ENABLE_LCD
-	lcd_task_init();
-#endif
-#if NODE_ENABLE_PINGPONG
-	pingpong_task_init();
-#endif
-
-#if NODE_ENABLE_CAN
-	ESP_LOGI(TAG, "CAN self-test: %s", can_run_selftest() ? "PASS" : "FAIL");
-	can_register_cli_commands();
-#endif
-
 	state_register_cli_commands();
 	identity_register_cli_commands();
-#if NODE_ENABLE_HEARTBEAT
-	heartbeat_task_register_cli_commands();
-#endif
-#if NODE_ENABLE_LCD
-	lcd_task_register_cli_commands();
-#endif
 
-#if NODE_ENABLE_LED
-	xTaskCreate(led_task, "led", 3072, NULL, 5, NULL);
-#endif
-#if NODE_ENABLE_HEARTBEAT
+	heartbeat_task_init();
+	display_task_init();
+	lcd_task_init();
+
+	ESP_LOGI(TAG, "CAN self-test: %s", can_run_selftest() ? "PASS" : "FAIL");
+	can_register_cli_commands();
+
+	lcd_task_register_cli_commands();
+
 	xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 5, NULL);
-#endif
-#if NODE_ENABLE_BUTTON
-	xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
-#endif
-#if NODE_ENABLE_DISPLAY
 	xTaskCreate(display_task, "display", 3072, NULL, 5, NULL);
-#endif
-#if NODE_ENABLE_LCD
 	xTaskCreate(lcd_task, "lcd", 3072, NULL, 5, NULL);
-#endif
-#if NODE_ENABLE_CAN
 	xTaskCreate(can_rx_task, "can_rx", 3072, NULL, 5, NULL);
-#endif
-#if NODE_ENABLE_PINGPONG
-	xTaskCreate(pingpong_task, "pingpong", 3072, NULL, 5, NULL);
-#endif
 
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);
+
+	/* Which task starts is decided once here, at boot, from NVRAM-backed
+	 * identity_role_read() -- ping_task()/pong_task() don't re-check role
+	 * themselves; identity_role_set() reboots the board on every role
+	 * change (see identity.c) precisely so this switch always reflects
+	 * the current role. */
+	identity_role_t role;
+	if (identity_role_read(&role)) {
+		switch (role) {
+		case IDENTITY_ROLE_PING:
+			ESP_LOGI(TAG, "role: ping");
+			ping_task_init();
+			xTaskCreate(ping_task, "ping", 3072, NULL, 5, NULL);
+			break;
+		case IDENTITY_ROLE_PONG:
+			ESP_LOGI(TAG, "role: pong");
+			pong_task_init();
+			xTaskCreate(pong_task, "pong", 3072, NULL, 5, NULL);
+			break;
+		default:
+			ESP_LOGE(TAG, "role: unknown value %d -- no task started", (int)role);
+			break;
+		}
+	} else {
+		ESP_LOGE(TAG, "role: not configured -- run 'config set-role ping|pong'");
+	}
 }

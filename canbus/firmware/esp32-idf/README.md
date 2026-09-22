@@ -31,24 +31,18 @@ exist are meant to change per node.
   assignments, `FIRMWARE_VERSION`. Per-*unit* identity (which two units
   running the identical binary need to differ on) is runtime/NVS-backed
   instead — see `identity.c` below.
-- **`state.c`/`.h`** — the shared "excitement counter" + heartbeat period,
-  mutex-protected (`SemaphoreHandle_t`) since tasks run concurrently
-  across the ESP32's two cores. Owns the `counter` CLI command.
-- **`led_task.c`/`.h`** — every 100ms, reads the counter; toggles the LED
-  if it changed since the last read.
-- **`heartbeat_task.c`/`.h`** — increments the counter every 1s on its
-  own. Owns the `rate` CLI command (sets its own period).
-- **`button_task.c`/`.h`** — polls the button every 100ms; increments the
-  counter on every poll where it reads pressed (holding it down keeps
-  incrementing, not just a single bump per press), and (if CAN is
-  enabled) broadcasts the new value too via `can_send_u32_nowait()` (0
-  timeout -- doesn't block this task's own poll loop waiting for TX
-  queue space if the bus is busy or has no listener): 4 bytes,
-  little-endian, on ID `0x110` — a scratch ID in
-  [../../docs/can-message-spec.md](../../docs/can-message-spec.md)'s
-  unallocated gap (`0x100`–`0x6FF`), numerically lower (so
-  higher-priority) than `display_task`'s `0x7F0` since a button press is
-  a more immediate event than periodic telemetry.
+- **`state.c`/`.h`** — the shared "excitement counter", mutex-protected
+  (`SemaphoreHandle_t`) since tasks run concurrently across the ESP32's
+  two cores. Owns the `counter` CLI command.
+- **`heartbeat_task.c`/`.h`** — ticks every `HB_MS_PER_TICK` (100ms);
+  increments the counter once every 5 ticks (500ms), and separately
+  toggles the LED whenever a read-back shows the counter actually
+  changed — which also catches a change from elsewhere (`can_rx_task`
+  bumping it on CAN RX), not just this task's own tick. No runtime-
+  configurable period (no CLI command owned here) — used to be two
+  separate tasks (`led_task` polling the counter every 100ms,
+  `heartbeat_task` ticking it on its own via a `rate`-settable period)
+  folded into one after `button_task` was removed.
 - **`display_task.c`/`.h`** — the *only* module that calls `lcd_display()`
   (see below) — every other module publishes its own state through a
   small getter (`state_counter_read()`, `pingpong_task_status_read()`,
@@ -56,7 +50,7 @@ exist are meant to change per node.
   for the physical display, one rotating "tab" per `DISPLAY_CYCLE_MS`
   (2s): `version` (`FIRMWARE_VERSION`), `counter` (the excitement
   counter), a static `hello`/`world`, and (if `NODE_ENABLE_PINGPONG`) a
-  `ping` tab reading `identity_mode_read()`/`identity_node_id_read()`
+  `ping` tab reading `identity_role_read()`/`identity_node_id_read()`
   and `pingpong_task_status_read()` — `"<ping|pong> id<N>"` on line 1,
   the latest exchange's outcome on line 2 (`"seq3 12ms"` /
   `"seq3 timeout"` / `"seq3 replied"` / `"unconfigured"`). Each tab is
@@ -72,34 +66,35 @@ exist are meant to change per node.
 - **`can.c`/`.h`** — TWAI driver + self-test + send/sniff, plus
   `can_send(id, data, len)` and the `can_send_u32(id, value)` convenience
   wrapper (little-endian 32-bit payload) other modules call directly
-  (`display_task` uses it for its counter broadcast). `can_send_nowait()`/
-  `can_send_u32_nowait()` are the same but with a 0 timeout on
-  `twai_transmit()` (`button_task` uses these) — that timeout is only
-  about waiting for room in the driver's TX queue, not the frame's
-  bus-level ACK, but it's still real blocking a frequent caller like a
-  held-down button shouldn't eat. Also
+  (`display_task` uses it for its counter broadcast). Also
   owns `can_rx_task` — the sole reader of `twai_receive()` once running,
   fanning every frame out to one software queue that `can_receive()`
-  drains from. The `can sniff` CLI command and `pingpong_task` are both
-  `can_receive()` consumers; running `can sniff` while pingpong is active
-  will steal frames from it (a manual diagnostic competing with a task,
-  not meant to run both at once). `can_rx_task` also bumps the
-  excitement counter once for every frame it takes off the bus — see
-  `state.c`'s own doc comment ("CAN frame received" is one of the
-  events the counter is meant to track); `pingpong_task` doesn't bump it
-  again itself when it later matches that same frame to a ping/pong
-  exchange, to avoid double-counting.
-- **`pingpong_task.c`/`.h`** — the two-node bring-up exercise: sends a
-  `PING` (ID `0x120`) and waits for the peer's `PONG` (`0x121`) echoing
-  the same sequence number back, logging the round trip; or the reverse,
-  replying to every `PING` it sees. Which role — decided by `identity.h`'s
-  runtime `mode`, re-read every loop iteration, so `config set-mode` (see
-  below) switches a running node between ping and pong with no reboot.
-  Requires `NODE_ENABLE_CAN`. Doesn't touch the LCD itself — publishes
-  the latest exchange (status/seq/rtt) through the mutex-protected
-  `pingpong_task_status_read()`, the same "own module publishes, one
-  place renders" shape `state.c` already uses for the counter;
-  `display_task`'s `ping` tab (above) is what actually shows it.
+  drains from. The `can sniff` CLI command and whichever of
+  `ping_task`/`pong_task` is running are both `can_receive()` consumers;
+  running `can sniff` while one of them is active will steal frames from
+  it (a manual diagnostic competing with a task, not meant to run both at
+  once). `can_rx_task` also bumps the excitement counter once for every
+  frame it takes off the bus — see `state.c`'s own doc comment ("CAN
+  frame received" is one of the events the counter is meant to track);
+  neither `ping_task` nor `pong_task` bumps it again itself when it later
+  matches that same frame to a ping/pong exchange, to avoid
+  double-counting.
+- **`pingpong_task.c`/`.h`** — the two-node bring-up exercise, split into
+  two task entry points: `ping_task` sends a `PING` (ID `0x120`) and waits
+  for the peer's `PONG` (`0x121`) echoing the same sequence number back,
+  logging the round trip; `pong_task` does the reverse, replying to every
+  `PING` it sees. Which role a board plays is decided once, at boot, by
+  `main.c`'s switch on `identity.h`'s runtime `role` — neither task
+  re-checks it itself, so `config set-role` (see below) reboots the board
+  immediately rather than switching roles live. Requires `NODE_ENABLE_CAN`.
+  Doesn't touch the LCD itself — publishes the latest exchange
+  (status/seq/rtt) through the mutex-protected `pingpong_task_status_read()`
+  (set up by whichever of `ping_task_init()`/`pong_task_init()` `main.c`
+  called for the role that started — both just create the same shared
+  mutex, so either is enough), the same
+  "own module publishes, one place renders" shape `state.c` already uses
+  for the counter; `display_task`'s `ping` tab (above) is what actually
+  shows it.
 - **`lcd_task.c`/`.h`** — drives a 16x2 HD44780 character LCD over a
   PCF8574 I2C backpack. Exposes `lcd_display(line1, line2)` for other
   modules to call directly (mutex-protected, non-blocking — it only
@@ -127,12 +122,14 @@ exist are meant to change per node.
   zero), and `hd44780_init_sequence()` explicitly space-fills both rows
   on top of the normal HD44780 clear command, rather than trusting a
   single clear to leave a clean screen on a bus that can still glitch.
-- **`identity.c`/`.h`** — per-unit runtime identity (`node_id`, `mode`),
+- **`identity.c`/`.h`** — per-unit runtime identity (`node_id`, `role`),
   stored in NVS rather than `node_config.h` since the goal is one shared
   binary flashed to every board, differentiated only by what's set over
   the CLI. Owns the `config` command. Survives `make flash` (which only
   rewrites the app partition, not NVS) — a board keeps its identity
-  across rebuilds; only `esptool erase_flash` clears it.
+  across rebuilds; only `esptool erase_flash` clears it. `identity_role_set()`
+  reboots the board (`esp_restart()`) on every successful change — see
+  `config set-role` below.
 - **`console.c`/`.h`** — `esp_console`/linenoise setup and the
   `console_task` loop (below), plus the core `help`/`version`/`exit`
   commands common to every node. This is "the same debug strategy" every
@@ -147,13 +144,13 @@ Enter. Commands (registered by the module that owns each one):
 - **`help`** — list all commands (built into `esp_console`).
 - **`version`** — firmware + ESP-IDF version.
 - **`counter`** — current excitement counter value.
-- **`rate N`** — set `heartbeat_task`'s period to `N*100ms`.
-- **`config show`** — print this board's node_id/mode (`unset` if never
+- **`config show`** — print this board's node_id/role (`unset` if never
   configured).
 - **`config set-id <n>`** — set and persist (NVS) this board's node_id
-  (0-255).
-- **`config set-mode <ping|pong>`** — set and persist (NVS) this board's
-  mode.
+  (0-255). Does not reboot — nothing reads `node_id` yet.
+- **`config set-role <ping|pong>`** — set and persist (NVS) this board's
+  role, then **reboot immediately** so `main.c`'s boot-time switch (see
+  `pingpong_task.c` above) picks it up.
 - **`can loop`** — self-test with D21 jumpered directly to D22 (no
   transceiver) — isolates the TWAI peripheral/firmware from the hardware.
 - **`can xcvr`** — the same self-test, but with the SN65HVD230 wired
@@ -195,17 +192,15 @@ already has the real thing (`candump`/`cansend`), see
 
 ## Wiring
 
-LED and button are onboard, no breadboard wiring needed:
+LED is onboard, no breadboard wiring needed:
 
 - LED: onboard LED on **GPIO2**.
-- Button: onboard **BOOT** button, wired to **GPIO0**.
 
-Both are strapping pins (sampled at boot to select flash/boot mode) — the
-earlier Zephyr app avoided them in favor of an external button on GPIO33,
-but once the app is running, GPIO0 reads like any other input (it's only
-sampled at reset), and the onboard LED's light loading on GPIO2 doesn't
-disturb boot-mode sensing in practice. GPIO0 already has an external
-pull-up on the board for the BOOT button.
+A strapping pin (sampled at boot to select flash/boot mode), but its
+light loading doesn't disturb boot-mode sensing in practice.
+
+The onboard **BOOT** button (GPIO0) is unused by firmware now that
+`button_task` is gone — free for something else later.
 
 CAN needs the external SN65HVD230 transceiver wired in — GPIO21 (TX) /
 GPIO22 (RX), silkscreened **D21**/**D22** on this DevKit V1-style board.
@@ -221,7 +216,7 @@ wired.
 
 ## Two-node bring-up (ping/pong)
 
-Two boards, one binary — `identity.c`'s runtime `mode` (not a rebuild) is
+Two boards, one binary — `identity.c`'s runtime `role` (not a rebuild) is
 what makes them behave differently. Since only one USB cable is in use
 (swapped between boards to flash each), and macOS reuses the same
 `/dev/cu.usbserial-XXXX` path for either one, there's no way to tell
@@ -233,8 +228,8 @@ before flashing/provisioning rather than assuming:
 
 | Board | MAC |
 |---|---|
-| A (`node_id=0`, `mode=ping`) | `58:2a:bd:80:87:d4` |
-| B (`node_id=1`, `mode=pong`) | `20:9b:a9:6f:bc:90` |
+| A (`node_id=0`, `role=ping`) | `58:2a:bd:80:87:d4` |
+| B (`node_id=1`, `role=pong`) | `20:9b:a9:6f:bc:90` |
 
 1. Wire the two boards' SN65HVD230 transceivers together: CAN-H to CAN-H,
    CAN-L to CAN-L, common GND. 120Ω termination at both physical ends —
@@ -243,19 +238,21 @@ before flashing/provisioning rather than assuming:
    two ends.
 2. `make build` once; `make flash PORT=...` both boards with the exact
    same binary.
-3. On board A's CLI: `config set-id 0`, `config set-mode ping`.
-4. On board B's CLI: `config set-id 1`, `config set-mode pong`.
-   Both `config set-*` calls persist to NVS and update the running
-   node's identity immediately — `pingpong_task` re-reads `mode` every
-   loop iteration, so no reboot is needed for either board.
+3. On board A's CLI: `config set-id 0`, then `config set-role ping`.
+4. On board B's CLI: `config set-id 1`, then `config set-role pong`.
+   `config set-id` just persists to NVS; `config set-role` persists too
+   but then reboots the board immediately (`identity_role_set()` calls
+   `esp_restart()`) so `main.c`'s boot-time switch picks up the new role
+   right away — no manual power-cycle needed, but do set the id first on
+   each board since the role change ends the CLI session.
 5. Watch the logs (or LCDs, if wired): board A logs `seq=N rtt=Xms` once
    a second; board B logs `seq=N replied` as it echoes each one back.
    `can sniff` from either board's CLI (or `cantool.py sniff` from the
    Mac) confirms the frames on the wire independently of the app logic —
-   but see `can.c`'s note above about it competing with `pingpong_task`
-   for the same queue.
+   but see `can.c`'s note above about it competing with whichever of
+   `ping_task`/`pong_task` is running for the same queue.
 
-`config set-id` isn't used by `pingpong_task` yet (only `mode` is) — it's
+`config set-id` isn't used by `ping_task`/`pong_task` yet (only `role` is) — it's
 there for whichever future exercise needs to tell the two nodes apart by
 more than role (e.g. a 3+ node test, or once messages carry a sender ID).
 
@@ -266,7 +263,7 @@ it needs no extra tooling. `nvs-board-a.csv` / `nvs-board-b.csv` (same
 directory) are the declarative alternative — one `key,type,encoding,value`
 row per NVS key, in the format ESP-IDF's own `nvs_partition_gen.py`
 expects, pre-filled with each board's `identity` namespace (`node_id`,
-`mode` — `0`/`1` for `ping`/`pong`, matching `identity_mode_t` in
+`role` — `0`/`1` for `ping`/`pong`, matching `identity_role_t` in
 `identity.h`). Useful for factory-style provisioning without ever
 touching the serial console, or for restoring identity after an
 `esptool erase_flash`. Generate and flash (each board's default `nvs`
@@ -275,8 +272,8 @@ partition table — confirm with `idf.py partition-table` if that's ever
 changed):
 
 ```
-make nvs-flash-a PORT=/dev/tty.usbserial-XXXX   # board A: node_id=0, mode=ping
-make nvs-flash-b PORT=/dev/tty.usbserial-XXXX   # board B: node_id=1, mode=pong
+make nvs-flash-a PORT=/dev/tty.usbserial-XXXX   # board A: node_id=0, role=ping
+make nvs-flash-b PORT=/dev/tty.usbserial-XXXX   # board B: node_id=1, role=pong
 ```
 
 (`make nvs-board-a.bin`/`make nvs-board-b.bin` generate just the image,
@@ -285,7 +282,7 @@ whole NVS partition, so it also overwrites anything else stored there —
 fine here since `identity` is the only thing this app keeps in NVS.
 Verify with `config show` over the CLI afterward. Check the board's MAC
 first (see the table above) — the CSV path has no cross-check against
-what's actually plugged in, unlike `config set-id`/`set-mode` where
+what's actually plugged in, unlike `config set-id`/`set-role` where
 you're watching the CLI respond live.
 
 ## Future ideas
@@ -322,7 +319,7 @@ this lab, not full designs:
   from.
 - **Third ESP32 node** — extend the two-node ping/pong bus to three.
   Would finally give `identity.c`'s `node_id` (persisted, but unused
-  since only `mode` drives behavior so far) a real job telling nodes
+  since only `role` drives behavior so far) a real job telling nodes
   apart, and exercise genuine multi-transmitter bus arbitration instead
   of just two nodes taking turns.
 

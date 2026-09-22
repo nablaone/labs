@@ -2,8 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_console.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -13,7 +16,7 @@ static const char *TAG = "identity";
 
 #define NVS_NAMESPACE   "identity"
 #define NVS_KEY_NODE_ID "node_id"
-#define NVS_KEY_MODE    "mode"
+#define NVS_KEY_ROLE    "role"
 
 static nvs_handle_t nvs;
 
@@ -21,8 +24,8 @@ static nvs_handle_t nvs;
  * NVS synchronously in every _set(), so cache and flash never drift. */
 static bool node_id_known;
 static uint8_t node_id_value;
-static bool mode_known;
-static identity_mode_t mode_value;
+static bool role_known;
+static identity_role_t role_value;
 
 void identity_init(void)
 {
@@ -41,23 +44,23 @@ void identity_init(void)
 		node_id_value = id;
 	}
 
-	uint8_t mode;
-	mode_known = nvs_get_u8(nvs, NVS_KEY_MODE, &mode) == ESP_OK;
-	if (mode_known) {
-		mode_value = (identity_mode_t)mode;
+	uint8_t role;
+	role_known = nvs_get_u8(nvs, NVS_KEY_ROLE, &role) == ESP_OK;
+	if (role_known) {
+		role_value = (identity_role_t)role;
 	}
 
-	if (node_id_known && mode_known) {
-		ESP_LOGI(TAG, "node_id=%u mode=%s", node_id_value,
-			 mode_value == IDENTITY_MODE_PING ? "ping" : "pong");
+	if (node_id_known && role_known) {
+		ESP_LOGI(TAG, "node_id=%u role=%s", node_id_value,
+			 role_value == IDENTITY_ROLE_PING ? "ping" : "pong");
 	} else {
-		ESP_LOGW(TAG, "unconfigured -- use the 'config' CLI command to set node_id/mode");
+		ESP_LOGW(TAG, "unconfigured -- use the 'config' CLI command to set node_id/role");
 	}
 }
 
 bool identity_is_configured(void)
 {
-	return node_id_known && mode_known;
+	return node_id_known && role_known;
 }
 
 bool identity_node_id_read(uint8_t *out_id)
@@ -79,28 +82,36 @@ bool identity_node_id_set(uint8_t id)
 	return true;
 }
 
-bool identity_mode_read(identity_mode_t *out_mode)
+bool identity_role_read(identity_role_t *out_role)
 {
-	if (!mode_known) {
+	if (!role_known) {
 		return false;
 	}
-	*out_mode = mode_value;
+	*out_role = role_value;
 	return true;
 }
 
-bool identity_mode_set(identity_mode_t mode)
+/* Reboots on success (see identity.h) -- main.c only picks ping_task/
+ * pong_task once, at boot, so there'd be no other way for a role change
+ * to actually take effect. fflush()+a short delay give the console time
+ * to send the caller's own "role set to ..." confirmation before the
+ * UART goes down. */
+bool identity_role_set(identity_role_t role)
 {
-	if (nvs_set_u8(nvs, NVS_KEY_MODE, (uint8_t)mode) != ESP_OK || nvs_commit(nvs) != ESP_OK) {
+	if (nvs_set_u8(nvs, NVS_KEY_ROLE, (uint8_t)role) != ESP_OK || nvs_commit(nvs) != ESP_OK) {
 		return false;
 	}
-	mode_value = mode;
-	mode_known = true;
-	return true;
+	role_value = role;
+	role_known = true;
+
+	fflush(stdout);
+	vTaskDelay(pdMS_TO_TICKS(100));
+	esp_restart();
 }
 
-static const char *mode_name(identity_mode_t mode)
+static const char *role_name(identity_role_t role)
 {
-	return mode == IDENTITY_MODE_PING ? "ping" : "pong";
+	return role == IDENTITY_ROLE_PING ? "ping" : "pong";
 }
 
 static int cmd_config_show(void)
@@ -112,11 +123,11 @@ static int cmd_config_show(void)
 		printf("node_id: unset\n");
 	}
 
-	identity_mode_t mode;
-	if (identity_mode_read(&mode)) {
-		printf("mode:    %s\n", mode_name(mode));
+	identity_role_t role;
+	if (identity_role_read(&role)) {
+		printf("role:    %s\n", role_name(role));
 	} else {
-		printf("mode:    unset\n");
+		printf("role:    unset\n");
 	}
 
 	return 0;
@@ -140,31 +151,31 @@ static int cmd_config_set_id(const char *arg)
 	return 0;
 }
 
-static int cmd_config_set_mode(const char *arg)
+static int cmd_config_set_role(const char *arg)
 {
-	identity_mode_t mode;
+	identity_role_t role;
 	if (strcmp(arg, "ping") == 0) {
-		mode = IDENTITY_MODE_PING;
+		role = IDENTITY_ROLE_PING;
 	} else if (strcmp(arg, "pong") == 0) {
-		mode = IDENTITY_MODE_PONG;
+		role = IDENTITY_ROLE_PONG;
 	} else {
-		printf("bad mode '%s' (expected 'ping' or 'pong')\n", arg);
+		printf("bad role '%s' (expected 'ping' or 'pong')\n", arg);
 		return 1;
 	}
 
-	if (!identity_mode_set(mode)) {
-		printf("failed to save mode\n");
+	printf("saving role '%s'...\n", arg);
+	if (!identity_role_set(role)) {
+		printf("failed to save role\n");
 		return 1;
 	}
 
-	printf("mode set to %s\n", arg);
-	return 0;
+	return 0; /* unreachable: identity_role_set() reboots on success */
 }
 
 static int cmd_config(int argc, char **argv)
 {
 	if (argc < 2) {
-		printf("usage: config <show|set-id <n>|set-mode <ping|pong>>\n");
+		printf("usage: config <show|set-id <n>|set-role <ping|pong>>\n");
 		return 1;
 	}
 
@@ -176,12 +187,12 @@ static int cmd_config(int argc, char **argv)
 			return 1;
 		}
 		return cmd_config_set_id(argv[2]);
-	} else if (strcmp(argv[1], "set-mode") == 0) {
+	} else if (strcmp(argv[1], "set-role") == 0) {
 		if (argc < 3) {
-			printf("usage: config set-mode <ping|pong>\n");
+			printf("usage: config set-role <ping|pong>\n");
 			return 1;
 		}
-		return cmd_config_set_mode(argv[2]);
+		return cmd_config_set_role(argv[2]);
 	}
 
 	printf("unknown config subcommand: '%s'\n", argv[1]);
@@ -192,7 +203,7 @@ void identity_register_cli_commands(void)
 {
 	const esp_console_cmd_t config_cmd = {
 		.command = "config",
-		.help = "Node identity: show | set-id <n> | set-mode <ping|pong>",
+		.help = "Node identity: show | set-id <n> | set-role <ping|pong> (reboots)",
 		.func = &cmd_config,
 	};
 	ESP_ERROR_CHECK(esp_console_cmd_register(&config_cmd));
