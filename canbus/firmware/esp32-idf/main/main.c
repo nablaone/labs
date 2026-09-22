@@ -10,7 +10,8 @@
 #include "heartbeat_task.h"
 #include "display_task.h"
 #include "can.h"
-#include "pingpong_task.h"
+#include "ping_role.h"
+#include "pong_role.h"
 
 static const char *TAG = "main";
 
@@ -19,9 +20,11 @@ static const char *TAG = "main";
  * registration. Common hardware (heartbeat+LED, display/LCD, CAN) is
  * always brought up; which role this node plays is runtime/NVRAM-backed
  * (identity.c's role) rather than a compile-time choice, so it's decided
- * last, once, via the switch below -- "config set-role" reboots the
- * board immediately (see identity.c) precisely because this decision is
- * only ever made here, at boot.
+ * last, once, by the switch below -- the single place that dispatches to
+ * launch_ping_role()/launch_pong_role(), each of which unconditionally
+ * registers its metrics and starts its task once called. "config
+ * set-role" reboots the board immediately (see identity.c) precisely
+ * because this dispatch only ever happens here, at boot.
  */
 void app_main(void)
 {
@@ -47,23 +50,20 @@ void app_main(void)
 
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);
 
-	/* Which task starts is decided once here, at boot, from NVRAM-backed
-	 * identity_role_read() -- ping_task()/pong_task() don't re-check role
-	 * themselves; identity_role_set() reboots the board on every role
-	 * change (see identity.c) precisely so this switch always reflects
-	 * the current role. */
+	/* Single dispatch point: which role's launcher (if any) gets called
+	 * is decided once here, at boot, from NVRAM-backed identity_role_read()
+	 * -- identity_role_set() reboots the board on every role change, so
+	 * this always reflects the current role. */
 	identity_role_t role;
 	if (identity_role_read(&role)) {
 		switch (role) {
 		case IDENTITY_ROLE_PING:
 			ESP_LOGI(TAG, "role: ping");
-			ping_task_init();
-			xTaskCreate(ping_task, "ping", 3072, NULL, 5, NULL);
+			launch_ping_role();
 			break;
 		case IDENTITY_ROLE_PONG:
 			ESP_LOGI(TAG, "role: pong");
-			pong_task_init();
-			xTaskCreate(pong_task, "pong", 3072, NULL, 5, NULL);
+			launch_pong_role();
 			break;
 		default:
 			ESP_LOGE(TAG, "role: unknown value %d -- no task started", (int)role);

@@ -15,7 +15,7 @@
 
 #define NODE_ENABLE_HEARTBEAT 1
 #define NODE_ENABLE_CAN       1
-/* Requires NODE_ENABLE_CAN -- see pingpong_task.c. */
+/* Requires NODE_ENABLE_CAN -- see ping_role.c/pong_role.c. */
 #define NODE_ENABLE_PINGPONG  1
 
 /* __DATE__ is the compiler builtin build date ("Sep  2 2026", note space-
@@ -69,9 +69,9 @@
  * cycling to the next one. See metrics.c/display_task.c. */
 #define DISPLAY_METRIC_MS 1000
 
-/* ping_task/pong_task: PING_PERIOD_MS is ping_task's period between
- * pings; PING_TIMEOUT_MS is how long ping_task waits for the matching
- * PONG before logging a timeout. pong_task blocks indefinitely instead
- * of polling, so it doesn't use either. See pingpong_task.c. */
+/* ping_role.c: PING_PERIOD_MS is ping_task's period between pings;
+ * PING_TIMEOUT_MS is how long ping_task waits for the matching PONG
+ * before logging a timeout. pong_role.c's pong_task blocks indefinitely
+ * instead of polling, so it doesn't use either. */
 #define PING_PERIOD_MS  1000
 #define PING_TIMEOUT_MS 300

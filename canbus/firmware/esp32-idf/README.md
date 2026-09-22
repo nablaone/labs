@@ -15,16 +15,21 @@ CAN-driven events.
 
 ## Module layout (`main/`)
 
-One file (`.c`/`.h`) per module. Each task module follows the same shape:
-an `xxx_task_init()` (one-time hardware setup, called from `app_main()`
-before the task starts) and `xxx_task()` (the actual FreeRTOS task loop,
-passed to `xTaskCreate()`). Non-task hardware modules (`can.c`) follow the
-same file-per-module convention without the task-loop part, since they're
-driven by CLI commands rather than a background loop. `main.c` itself is
-just orchestration — init each enabled module, register CLI commands,
-create tasks — and should stay identical across nodes; only
-`node_config.h` (pins, which modules are enabled) and which module files
-exist are meant to change per node.
+One file (`.c`/`.h`) per module. Most task modules follow the same
+shape: an `xxx_task_init()` (one-time hardware setup, called from
+`app_main()` before the task starts) and `xxx_task()` (the actual
+FreeRTOS task loop, passed to `xTaskCreate()`). Non-task hardware
+modules (`can.c`) follow the same file-per-module convention without the
+task-loop part, since they're driven by CLI commands rather than a
+background loop. `ping_role.c`/`pong_role.c` follow a third shape —
+`launch_*_role()` folds init and task creation into one unconditional
+call; deciding *which one* (if either) to call is `main.c`'s job, via a
+switch on the current role (see below) — a single dispatch point rather
+than each module deciding for itself. `main.c` itself is just
+orchestration — init each enabled module, register CLI commands, create
+tasks — and should stay identical across nodes; only `node_config.h`
+(pins, which modules are enabled) and which module files exist are meant
+to change per node.
 
 - **`node_config.h`** — the file a new node copies and edits: compile-time
   `NODE_ENABLE_*` flags for which modules this build includes, pin
@@ -52,9 +57,10 @@ exist are meant to change per node.
   set once, never changes); `state.c` registers/updates `counter`;
   `identity.c` registers `identity.role` in `identity_init()` (`"unset"`
   until configured) and updates it in `identity_role_set()`;
-  `pingpong_task.c` registers `pingpong.status`/`pingpong.seq`/
-  `pingpong.rtt_ms` in `ping_task_init()`/`pong_task_init()` and updates
-  all three together from `status_set()`.
+  `ping_role.c`/`pong_role.c` each register `pingpong.status`/
+  `pingpong.seq`/`pingpong.rtt_ms` in `launch_ping_role()`/
+  `launch_pong_role()` and update all three together from their own
+  (separate, near-identical) `status_set()`.
 - **`heartbeat_task.c`/`.h`** — ticks every `HB_MS_PER_TICK` (100ms);
   increments the counter once every 5 ticks (500ms), and separately
   toggles the LED whenever a read-back shows the counter actually
@@ -115,21 +121,29 @@ exist are meant to change per node.
   neither `ping_task` nor `pong_task` bumps it again itself when it later
   matches that same frame to a ping/pong exchange, to avoid
   double-counting.
-- **`pingpong_task.c`/`.h`** — the two-node bring-up exercise, split into
-  two task entry points: `ping_task` sends a `PING` (ID `0x120`) and waits
+- **`ping_role.c`/`.h`** and **`pong_role.c`/`.h`** — the two-node
+  bring-up exercise, one file per side rather than one shared module:
+  `ping_task` (in `ping_role.c`) sends a `PING` (ID `0x120`) and waits
   for the peer's `PONG` (`0x121`) echoing the same sequence number back,
-  logging the round trip; `pong_task` does the reverse, replying to every
-  `PING` it sees. Which role a board plays is decided once, at boot, by
-  `main.c`'s switch on `identity.h`'s runtime `role` — neither task
-  re-checks it itself, so `config set-role` (see below) reboots the board
-  immediately rather than switching roles live. Requires `NODE_ENABLE_CAN`.
-  Doesn't touch the LCD itself — publishes the latest exchange as the
-  `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms` metrics (registered
-  by whichever of `ping_task_init()`/`pong_task_init()` `main.c` called
-  for the role that started, updated by `status_set()`). No status state
-  or mutex of its own — `metrics.c`'s table is already mutex-protected,
-  so there's nothing left for this module to own once `display_task`
-  reads that table generically instead of a per-module getter.
+  logging the round trip; `pong_task` (in `pong_role.c`) does the
+  reverse, replying to every `PING` it sees. Each file owns a
+  `launch_*_role()` entry point (`launch_ping_role()`/
+  `launch_pong_role()`) — unconditional: it just registers its metrics
+  and starts its task, no role check of its own. `main.c`'s switch on
+  `identity.h`'s runtime role is the single place that decides which one
+  (if either) gets called; since that's decided once, at boot, not
+  re-checked per loop, `config set-role` (see below) reboots the board
+  immediately rather than switching roles live. Requires
+  `NODE_ENABLE_CAN`. Neither touches the LCD — each publishes the latest
+  exchange as the `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms`
+  metrics from its own `status_set()` (two separate, near-identical
+  copies — no status state or mutex of their own, since `metrics.c`'s
+  table is already mutex-protected). The two files duplicate a handful
+  of small pieces on purpose (the `CAN_ID_PING`/`CAN_ID_PONG` `#define`s,
+  `decode_seq()`, `status_set()`) rather than share a third module,
+  trading a little repetition for each file being fully self-contained —
+  the `CAN_ID_*` values do need to stay in sync between the two copies
+  if either ever changes.
 - **`identity.c`/`.h`** — per-unit runtime identity (`node_id`, `role`),
   stored in NVS rather than `node_config.h` since the goal is one shared
   binary flashed to every board, differentiated only by what's set over
@@ -155,15 +169,16 @@ Enter. Commands (registered by the module that owns each one):
 - **`metrics`** — dump the whole `metrics.c` status table (key, type,
   value); `version`, `counter`, and `identity.role` are always
   registered, plus `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms`
-  once this board's role is configured and `ping_task_init()`/
-  `pong_task_init()` has run.
+  once this board's role is configured and `main.c`'s switch has called
+  the matching `launch_*_role()`.
 - **`config show`** — print this board's node_id/role (`unset` if never
   configured).
 - **`config set-id <n>`** — set and persist (NVS) this board's node_id
   (0-255). Does not reboot — nothing reads `node_id` yet.
 - **`config set-role <ping|pong>`** — set and persist (NVS) this board's
-  role, then **reboot immediately** so `main.c`'s boot-time switch (see
-  `pingpong_task.c` above) picks it up.
+  role, then **reboot immediately** so `main.c`'s switch (see
+  `ping_role.c`/`pong_role.c` above) dispatches to the matching role on
+  the next boot.
 - **`can loop`** — self-test with D21 jumpered directly to D22 (no
   transceiver) — isolates the TWAI peripheral/firmware from the hardware.
 - **`can xcvr`** — the same self-test, but with the SN65HVD230 wired
@@ -253,9 +268,9 @@ before flashing/provisioning rather than assuming:
 4. On board B's CLI: `config set-id 1`, then `config set-role pong`.
    `config set-id` just persists to NVS; `config set-role` persists too
    but then reboots the board immediately (`identity_role_set()` calls
-   `esp_restart()`) so `main.c`'s boot-time switch picks up the new role
-   right away — no manual power-cycle needed, but do set the id first on
-   each board since the role change ends the CLI session.
+   `esp_restart()`) so `main.c`'s switch (see above) dispatches to the
+   new role right away — no manual power-cycle needed, but do set the id
+   first on each board since the role change ends the CLI session.
 5. Watch the logs (or LCDs, if wired — the `pingpong.*` metrics take
    their turn in the display's rotation alongside `version`/`counter`/
    `identity.role`, once per `DISPLAY_METRIC_MS`): board A logs

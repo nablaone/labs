@@ -52,10 +52,10 @@ void metrics_register_cli_commands(void);
 
 /* Number of currently registered metrics -- valid indices for
  * metrics_get() below are [0, metrics_count()). Can grow between calls
- * (a module registering a new key later, e.g. pingpong_task's metrics
- * only appear once this board's role is configured) -- callers that walk
- * the table on a timer, like display_task, should re-check it each pass
- * rather than caching it once. */
+ * (a module registering a new key later, e.g. ping_role.c/pong_role.c's
+ * metrics only appear once this board's role is configured) -- callers
+ * that walk the table on a timer, like display_task, should re-check it
+ * each pass rather than caching it once. */
 size_t metrics_count(void);
 
 /* Copies the key and a human-readable value string for slot idx into the

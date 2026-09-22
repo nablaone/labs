@@ -194,8 +194,8 @@ void display_task_init(void)
 /* Cycles through every currently registered metric, one per
  * DISPLAY_METRIC_MS: key on line 1, value on line 2. metrics_count() is
  * re-checked every iteration since the table can grow after this task
- * starts (e.g. pingpong_task's metrics only appear once this board's
- * role is configured). */
+ * starts (e.g. ping_role.c/pong_role.c's metrics only appear once this
+ * board's role is configured). */
 void display_task(void *arg)
 {
 	if (!lcd_present) {

@@ -24,10 +24,9 @@ static const char *TAG = "can";
 #define CAN_SNIFF_TIMEOUT_MS (30 * 1000)
 
 /* Depth of the software RX queue can_rx_task fans frames into -- generous
- * relative to this app's traffic (a few Hz of ping/pong plus occasional
- * button/display broadcasts), so a consumer that's briefly slow (e.g.
- * pingpong_task mid round-trip-timeout) doesn't lose frames under normal
- * conditions. */
+ * relative to this app's traffic (a few Hz of ping/pong), so a consumer
+ * that's briefly slow (e.g. ping_role.c's ping_task mid round-trip-
+ * timeout) doesn't lose frames under normal conditions. */
 #define CAN_RX_QUEUE_LEN 16
 
 static QueueHandle_t can_rx_queue;
@@ -226,8 +225,8 @@ static int cmd_can_xcvr(void)
  * Reads via can_receive() (the shared software queue), not twai_receive()
  * directly -- can_rx_task is the sole reader of the driver's own RX side
  * once it's running. That does mean this command competes with any other
- * can_receive() consumer (pingpong_task) for the same frames -- see
- * can.h's doc comment. */
+ * can_receive() consumer (ping_role/pong_role) for the same frames --
+ * see can.h's doc comment. */
 static int cmd_can_sniff(void)
 {
 	printf("Sniffing for %ds...\n", CAN_SNIFF_TIMEOUT_MS / 1000);
@@ -348,9 +347,9 @@ void can_rx_task(void *arg)
 		 * the events it's meant to track) -- bumped here, once per
 		 * frame, regardless of which consumer (if any) later reads it
 		 * off can_rx_queue, so a dropped/unread frame still counts as
-		 * received. Individual consumers (pingpong_task) no longer
-		 * bump it themselves on top of this, to avoid double-counting
-		 * the same frame. */
+		 * received. Individual consumers (ping_role.c/pong_role.c) no
+		 * longer bump it themselves on top of this, to avoid double-
+		 * counting the same frame. */
 		state_counter_increment();
 
 		if (xQueueSend(can_rx_queue, &msg, pdMS_TO_TICKS(10)) != pdTRUE) {

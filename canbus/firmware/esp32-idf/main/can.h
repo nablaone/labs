@@ -12,7 +12,7 @@
  * sniff, send) or called directly by other modules (can_send()). The one
  * exception is can_rx_task(): once started, it's the sole reader of
  * twai_receive() and fans every frame out to one software queue that any
- * consumer -- the "can sniff" CLI command, pingpong_task -- drains via
+ * consumer -- the "can sniff" CLI command, ping_role/pong_role -- drains via
  * can_receive(). Still one file/module, same as the task modules, since
  * it's the "hardware code" this app's design is meant to grow more of
  * (see ../../../docs/project-charter.md).
@@ -49,8 +49,8 @@ void can_register_cli_commands(void);
 void can_rx_task(void *arg);
 
 /* Blocks up to `timeout` for the next frame can_rx_task received. Shared
- * by the "can sniff" CLI command and pingpong_task -- running "can sniff"
- * while pingpong is active will steal frames from it (a manual diagnostic
- * command competing with a task, not meant to run both at once).
- * Returns false on timeout. */
+ * by the "can sniff" CLI command and whichever of ping_role/pong_role is
+ * running -- running "can sniff" while one of them is active will steal
+ * frames from it (a manual diagnostic command competing with a task,
+ * not meant to run both at once). Returns false on timeout. */
 bool can_receive(twai_message_t *msg, TickType_t timeout);
