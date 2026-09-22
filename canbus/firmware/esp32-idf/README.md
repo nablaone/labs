@@ -49,11 +49,14 @@ exist are meant to change per node.
   Keys registered so far: `main.c` registers `version` (`FIRMWARE_VERSION`,
   set once, never changes); `state.c` registers/updates `counter`;
   `identity.c` registers `identity.role` in `identity_init()` (`"unset"`
-  until configured) and updates it in `identity_role_set()`. Migrating
-  `pingpong_task`'s status/seq/rtt to also publish here is still a
-  follow-up, not done in this change; `display_task`'s
-  LCD tabs keep reading those directly either way, since that's a
-  different, latency-sensitive consumer this registry isn't meant to
+  until configured) and updates it in `identity_role_set()`;
+  `pingpong_task.c` registers `pingpong.status`/`pingpong.seq`/
+  `pingpong.rtt_ms` in `ping_task_init()`/`pong_task_init()` and updates
+  all three together from `status_set()`, the same single place that
+  updates the mutex-protected snapshot `pingpong_task_status_read()`
+  serves. `display_task`'s LCD tabs keep reading that getter directly
+  rather than the metrics table, since that's a different, latency-
+  sensitive consumer this registry isn't meant to
   replace.
 - **`heartbeat_task.c`/`.h`** — ticks every `HB_MS_PER_TICK` (100ms);
   increments the counter once every 5 ticks (500ms), and separately
@@ -166,8 +169,10 @@ Enter. Commands (registered by the module that owns each one):
 - **`version`** — firmware + ESP-IDF version.
 - **`counter`** — current excitement counter value.
 - **`metrics`** — dump the whole `metrics.c` status table (key, type,
-  value); `version`, `counter`, and `identity.role` are registered by
-  default, more as other modules adopt it.
+  value); `version`, `counter`, and `identity.role` are always
+  registered, plus `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms`
+  once this board's role is configured and `ping_task_init()`/
+  `pong_task_init()` has run.
 - **`config show`** — print this board's node_id/role (`unset` if never
   configured).
 - **`config set-id <n>`** — set and persist (NVS) this board's node_id

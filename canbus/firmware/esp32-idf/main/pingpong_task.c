@@ -10,6 +10,7 @@
 
 #include "node_config.h"
 #include "can.h"
+#include "metrics.h"
 #include "pingpong_task.h"
 
 static const char *TAG = "pingpong";
@@ -24,6 +25,18 @@ static struct {
 } pingpong_state;
 static SemaphoreHandle_t pingpong_mutex;
 
+static const char *status_name(pingpong_status_t status)
+{
+	switch (status) {
+	case PINGPONG_STATUS_OK:      return "ok";
+	case PINGPONG_STATUS_TIMEOUT: return "timeout";
+	default:                      return "none";
+	}
+}
+
+/* Also mirrors every update into the pingpong.* metrics (see metrics.c)
+ * -- released pingpong_mutex first rather than holding it while taking
+ * metrics_mutex too, same as state.c's state_counter_increment(). */
 static void status_set(pingpong_status_t status, uint32_t seq, uint32_t rtt_ms)
 {
 	xSemaphoreTake(pingpong_mutex, portMAX_DELAY);
@@ -31,6 +44,10 @@ static void status_set(pingpong_status_t status, uint32_t seq, uint32_t rtt_ms)
 	pingpong_state.seq = seq;
 	pingpong_state.rtt_ms = rtt_ms;
 	xSemaphoreGive(pingpong_mutex);
+
+	metrics_set_string("pingpong.status", status_name(status));
+	metrics_set_int("pingpong.seq", (int32_t)seq);
+	metrics_set_int("pingpong.rtt_ms", (int32_t)rtt_ms);
 }
 
 void pingpong_task_status_read(pingpong_status_t *status, uint32_t *seq, uint32_t *rtt_ms)
@@ -47,14 +64,22 @@ void pingpong_task_status_read(pingpong_status_t *status, uint32_t *seq, uint32_
 #define CAN_ID_PING 0x120
 #define CAN_ID_PONG 0x121
 
-void ping_task_init(void)
+static void pingpong_shared_init(void)
 {
 	pingpong_mutex = xSemaphoreCreateMutex();
+	metrics_register_string("pingpong.status", status_name(PINGPONG_STATUS_NONE));
+	metrics_register_int("pingpong.seq", 0);
+	metrics_register_int("pingpong.rtt_ms", 0);
+}
+
+void ping_task_init(void)
+{
+	pingpong_shared_init();
 }
 
 void pong_task_init(void)
 {
-	pingpong_mutex = xSemaphoreCreateMutex();
+	pingpong_shared_init();
 }
 
 static uint32_t decode_seq(const twai_message_t *msg)

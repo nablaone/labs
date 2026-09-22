@@ -27,9 +27,11 @@ typedef enum {
 } pingpong_status_t;
 
 /* Sends a PING every PING_PERIOD_MS and waits for the matching PONG.
- * ping_task_init() sets up the shared status mutex below -- call whichever
- * of this or pong_task_init() matches the task main.c is about to start;
- * either one is enough, both just create the same mutex. */
+ * ping_task_init() sets up the shared status mutex below and registers
+ * the pingpong.status/pingpong.seq/pingpong.rtt_ms metrics (see
+ * metrics.c) -- call whichever of this or pong_task_init() matches the
+ * task main.c is about to start; either one is enough, both do the same
+ * thing. */
 void ping_task_init(void);
 void ping_task(void *arg);
 
@@ -41,5 +43,6 @@ void pong_task(void *arg);
 /* Mutex-protected snapshot of the most recent exchange -- rtt_ms is only
  * meaningful when status is PINGPONG_STATUS_OK and this node is currently
  * playing the ping role (0 otherwise, e.g. a pong reply has no round trip
- * of its own to report). */
+ * of its own to report). Same data also published as the pingpong.status/
+ * pingpong.seq/pingpong.rtt_ms metrics, for the "metrics" CLI command. */
 void pingpong_task_status_read(pingpong_status_t *status, uint32_t *seq, uint32_t *rtt_ms);
