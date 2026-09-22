@@ -2,9 +2,11 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
+#include "node_config.h"
 #include "state.h"
 #include "console.h"
 #include "identity.h"
+#include "metrics.h"
 #include "heartbeat_task.h"
 #include "display_task.h"
 #include "can.h"
@@ -24,12 +26,15 @@ static const char *TAG = "main";
  */
 void app_main(void)
 {
+	metrics_init();
+	metrics_register_string("version", FIRMWARE_VERSION);
 	state_init();
 	identity_init();
 	console_init();
 
 	state_register_cli_commands();
 	identity_register_cli_commands();
+	metrics_register_cli_commands();
 
 	heartbeat_task_init();
 	display_task_init();

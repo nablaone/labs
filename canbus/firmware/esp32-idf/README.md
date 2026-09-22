@@ -33,7 +33,28 @@ exist are meant to change per node.
   instead — see `identity.c` below.
 - **`state.c`/`.h`** — the shared "excitement counter", mutex-protected
   (`SemaphoreHandle_t`) since tasks run concurrently across the ESP32's
-  two cores. Owns the `counter` CLI command.
+  two cores. Owns the `counter` CLI command, and also publishes the same
+  value as the `counter` metric (see below) from `state_init()`/
+  `state_counter_increment()`.
+- **`metrics.c`/`.h`** — generic key → typed-value status registry
+  (`bool`/`int32_t`/`float`/short string), mutex-protected like `state.c`.
+  Any module can `metrics_register_*()` a key (typically from its own
+  `_init()`) and `metrics_set_*()` it as it runs; dotted, module-prefixed
+  keys (`"identity.role"`) avoid collisions where a name isn't already
+  unambiguous on its own (`counter`, `version`). Owns the `metrics` CLI
+  command, which dumps the whole table — the only consumer, so there's no
+  public read/getter API. `main.c` calls `metrics_init()` **first**, before
+  `state_init()`/`identity_init()`, since both of those register a metric
+  from their own `_init()` and need the registry's mutex to already exist.
+  Keys registered so far: `main.c` registers `version` (`FIRMWARE_VERSION`,
+  set once, never changes); `state.c` registers/updates `counter`;
+  `identity.c` registers `identity.role` in `identity_init()` (`"unset"`
+  until configured) and updates it in `identity_role_set()`. Migrating
+  `pingpong_task`'s status/seq/rtt to also publish here is still a
+  follow-up, not done in this change; `display_task`'s
+  LCD tabs keep reading those directly either way, since that's a
+  different, latency-sensitive consumer this registry isn't meant to
+  replace.
 - **`heartbeat_task.c`/`.h`** — ticks every `HB_MS_PER_TICK` (100ms);
   increments the counter once every 5 ticks (500ms), and separately
   toggles the LED whenever a read-back shows the counter actually
@@ -144,6 +165,9 @@ Enter. Commands (registered by the module that owns each one):
 - **`help`** — list all commands (built into `esp_console`).
 - **`version`** — firmware + ESP-IDF version.
 - **`counter`** — current excitement counter value.
+- **`metrics`** — dump the whole `metrics.c` status table (key, type,
+  value); `version`, `counter`, and `identity.role` are registered by
+  default, more as other modules adopt it.
 - **`config show`** — print this board's node_id/role (`unset` if never
   configured).
 - **`config set-id <n>`** — set and persist (NVS) this board's node_id

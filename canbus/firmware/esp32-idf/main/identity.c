@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 
 #include "identity.h"
+#include "metrics.h"
 
 static const char *TAG = "identity";
 
@@ -26,6 +27,11 @@ static bool node_id_known;
 static uint8_t node_id_value;
 static bool role_known;
 static identity_role_t role_value;
+
+static const char *role_name(identity_role_t role)
+{
+	return role == IDENTITY_ROLE_PING ? "ping" : "pong";
+}
 
 void identity_init(void)
 {
@@ -51,11 +57,12 @@ void identity_init(void)
 	}
 
 	if (node_id_known && role_known) {
-		ESP_LOGI(TAG, "node_id=%u role=%s", node_id_value,
-			 role_value == IDENTITY_ROLE_PING ? "ping" : "pong");
+		ESP_LOGI(TAG, "node_id=%u role=%s", node_id_value, role_name(role_value));
 	} else {
 		ESP_LOGW(TAG, "unconfigured -- use the 'config' CLI command to set node_id/role");
 	}
+
+	metrics_register_string("identity.role", role_known ? role_name(role_value) : "unset");
 }
 
 bool identity_is_configured(void)
@@ -103,15 +110,11 @@ bool identity_role_set(identity_role_t role)
 	}
 	role_value = role;
 	role_known = true;
+	metrics_set_string("identity.role", role_name(role));
 
 	fflush(stdout);
 	vTaskDelay(pdMS_TO_TICKS(100));
 	esp_restart();
-}
-
-static const char *role_name(identity_role_t role)
-{
-	return role == IDENTITY_ROLE_PING ? "ping" : "pong";
 }
 
 static int cmd_config_show(void)

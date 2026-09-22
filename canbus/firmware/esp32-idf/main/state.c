@@ -6,6 +6,7 @@
 #include "esp_console.h"
 
 #include "state.h"
+#include "metrics.h"
 
 static struct {
 	uint32_t counter;
@@ -17,6 +18,7 @@ static SemaphoreHandle_t state_mutex;
 void state_init(void)
 {
 	state_mutex = xSemaphoreCreateMutex();
+	metrics_register_int("counter", (int32_t)state.counter);
 }
 
 uint32_t state_counter_read(void)
@@ -30,8 +32,9 @@ uint32_t state_counter_read(void)
 void state_counter_increment(void)
 {
 	xSemaphoreTake(state_mutex, portMAX_DELAY);
-	state.counter++;
+	uint32_t value = ++state.counter;
 	xSemaphoreGive(state_mutex);
+	metrics_set_int("counter", (int32_t)value);
 }
 
 static int cmd_counter(int argc, char **argv)
