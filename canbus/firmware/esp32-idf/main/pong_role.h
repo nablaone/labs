@@ -3,8 +3,8 @@
 /*
  * Pong side of the two-node CAN bring-up exercise (see ping_role.h for
  * the other side). Replies to every PING it sees, publishing the
- * outcome as the pingpong.status/pingpong.seq/pingpong.rtt_ms metrics
- * (see metrics.c).
+ * outcome as the pong_role.status/pong_role.seq/pong_role.rtt_ms
+ * metrics (see metrics.c).
  */
 
 /* Registers this role's metrics and starts pong_task, unconditionally --

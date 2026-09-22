@@ -21,9 +21,9 @@ static const char *TAG = "ping";
 
 static void status_set(const char *status, uint32_t seq, uint32_t rtt_ms)
 {
-	metrics_set_string("pingpong.status", status);
-	metrics_set_int("pingpong.seq", (int32_t)seq);
-	metrics_set_int("pingpong.rtt_ms", (int32_t)rtt_ms);
+	metrics_set_string("ping_role.status", status);
+	metrics_set_int("ping_role.seq", (int32_t)seq);
+	metrics_set_int("ping_role.rtt_ms", (int32_t)rtt_ms);
 }
 
 static uint32_t decode_seq(const twai_message_t *msg)
@@ -78,9 +78,9 @@ static void ping_task(void *arg)
 
 void launch_ping_role(void)
 {
-	metrics_register_string("pingpong.status", "none");
-	metrics_register_int("pingpong.seq", 0);
-	metrics_register_int("pingpong.rtt_ms", 0);
+	metrics_register_string("ping_role.status", "none");
+	metrics_register_int("ping_role.seq", 0);
+	metrics_register_int("ping_role.rtt_ms", 0);
 
 	xTaskCreate(ping_task, "ping", 3072, NULL, 5, NULL);
 }

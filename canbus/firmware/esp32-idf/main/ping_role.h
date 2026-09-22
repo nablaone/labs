@@ -3,8 +3,8 @@
 /*
  * Ping side of the two-node CAN bring-up exercise (see pong_role.h for
  * the other side). Sends a PING every PING_PERIOD_MS and waits for the
- * matching PONG, publishing the outcome as the pingpong.status/
- * pingpong.seq/pingpong.rtt_ms metrics (see metrics.c).
+ * matching PONG, publishing the outcome as the ping_role.status/
+ * ping_role.seq/ping_role.rtt_ms metrics (see metrics.c).
  */
 
 /* Registers this role's metrics and starts ping_task, unconditionally --

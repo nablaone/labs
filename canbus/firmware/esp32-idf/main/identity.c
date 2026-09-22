@@ -30,7 +30,14 @@ static identity_role_t role_value;
 
 static const char *role_name(identity_role_t role)
 {
-	return role == IDENTITY_ROLE_PING ? "ping" : "pong";
+	switch (role) {
+	case IDENTITY_ROLE_PING:
+		return "ping";
+	case IDENTITY_ROLE_PONG:
+		return "pong";
+	default:
+		return "<unknown>";
+	}
 }
 
 void identity_init(void)

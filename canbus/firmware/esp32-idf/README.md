@@ -57,9 +57,10 @@ to change per node.
   set once, never changes); `state.c` registers/updates `counter`;
   `identity.c` registers `identity.role` in `identity_init()` (`"unset"`
   until configured) and updates it in `identity_role_set()`;
-  `ping_role.c`/`pong_role.c` each register `pingpong.status`/
-  `pingpong.seq`/`pingpong.rtt_ms` in `launch_ping_role()`/
-  `launch_pong_role()` and update all three together from their own
+  `ping_role.c` registers `ping_role.status`/`ping_role.seq`/
+  `ping_role.rtt_ms` in `launch_ping_role()`; `pong_role.c` registers
+  the analogous `pong_role.status`/`pong_role.seq`/`pong_role.rtt_ms` in
+  `launch_pong_role()` — each updates its own three together from its own
   (separate, near-identical) `status_set()`.
 - **`heartbeat_task.c`/`.h`** — ticks every `HB_MS_PER_TICK` (100ms);
   increments the counter once every 5 ticks (500ms), and separately
@@ -78,9 +79,10 @@ to change per node.
   the next registered metric, key on line 1 / value on line 2, wrapping
   back to the first once it's cycled through all of them
   (`metrics_count()` is re-checked every cycle, so a metric registered
-  after boot, e.g. `pingpong.*` once a role is configured, joins the
-  rotation on its own). Nothing else — no CLI command to push arbitrary
-  text, no CAN broadcast, no per-module special-casing; a module that
+  after boot, e.g. `ping_role.*`/`pong_role.*` once a role is
+  configured, joins the rotation on its own). Nothing else — no CLI
+  command to push arbitrary text, no CAN broadcast, no per-module
+  special-casing; a module that
   wants something shown just registers a metric, and this task doesn't
   know or care which module that was. `display_task_init()` brings up
   the I2C bus/device and, if a real write to `LCD_I2C_ADDR` succeeds
@@ -135,10 +137,11 @@ to change per node.
   re-checked per loop, `config set-role` (see below) reboots the board
   immediately rather than switching roles live. Requires
   `NODE_ENABLE_CAN`. Neither touches the LCD — each publishes the latest
-  exchange as the `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms`
-  metrics from its own `status_set()` (two separate, near-identical
-  copies — no status state or mutex of their own, since `metrics.c`'s
-  table is already mutex-protected). The two files duplicate a handful
+  exchange as its own `status`/`seq`/`rtt_ms` metrics (`ping_role.*` /
+  `pong_role.*`, matching each file's name) from its own `status_set()`
+  (two separate, near-identical copies — no status state or mutex of
+  their own, since `metrics.c`'s table is already mutex-protected). The
+  two files duplicate a handful
   of small pieces on purpose (the `CAN_ID_PING`/`CAN_ID_PONG` `#define`s,
   `decode_seq()`, `status_set()`) rather than share a third module,
   trading a little repetition for each file being fully self-contained —
@@ -168,9 +171,9 @@ Enter. Commands (registered by the module that owns each one):
 - **`counter`** — current excitement counter value.
 - **`metrics`** — dump the whole `metrics.c` status table (key, type,
   value); `version`, `counter`, and `identity.role` are always
-  registered, plus `pingpong.status`/`pingpong.seq`/`pingpong.rtt_ms`
-  once this board's role is configured and `main.c`'s switch has called
-  the matching `launch_*_role()`.
+  registered, plus that role's `status`/`seq`/`rtt_ms` (`ping_role.*` or
+  `pong_role.*`) once this board's role is configured and `main.c`'s
+  switch has called the matching `launch_*_role()`.
 - **`config show`** — print this board's node_id/role (`unset` if never
   configured).
 - **`config set-id <n>`** — set and persist (NVS) this board's node_id
@@ -271,9 +274,10 @@ before flashing/provisioning rather than assuming:
    `esp_restart()`) so `main.c`'s switch (see above) dispatches to the
    new role right away — no manual power-cycle needed, but do set the id
    first on each board since the role change ends the CLI session.
-5. Watch the logs (or LCDs, if wired — the `pingpong.*` metrics take
-   their turn in the display's rotation alongside `version`/`counter`/
-   `identity.role`, once per `DISPLAY_METRIC_MS`): board A logs
+5. Watch the logs (or LCDs, if wired — the active role's `ping_role.*`/
+   `pong_role.*` metrics take their turn in the display's rotation
+   alongside `version`/`counter`/`identity.role`, once per
+   `DISPLAY_METRIC_MS`): board A logs
    `seq=N rtt=Xms` once a second; board B logs `seq=N replied` as it
    echoes each one back.
    `can sniff` from either board's CLI (or `cantool.py sniff` from the
