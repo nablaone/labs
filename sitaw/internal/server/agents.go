@@ -52,11 +52,11 @@ func (s *Server) handleAgentInstructions(w http.ResponseWriter, r *http.Request,
 	})
 }
 
-// humanOnly keeps agents from managing agents.
+// humanOnly keeps agents from managing agents and teams.
 func (s *Server) humanOnly(h func(http.ResponseWriter, *http.Request, store.User)) http.HandlerFunc {
 	return s.withUser(func(w http.ResponseWriter, r *http.Request, u store.User) {
 		if u.IsAgent() {
-			httpError(w, http.StatusForbidden, "agents cannot manage agents")
+			httpError(w, http.StatusForbidden, "agents cannot manage agents or teams")
 			return
 		}
 		h(w, r, u)

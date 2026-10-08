@@ -136,6 +136,7 @@ implemented but have not been tested by hand in a browser yet.
 | Invitation-link auth | MVP | [x] | One shared link per team; callsigns are unique within a team (case-insensitive) |
 | Object links (`/i/<id>`, `/u/<id>`) | MVP | [x] | Selecting an object changes the URL; links open only for team members |
 | Admin: teams, invites, members | MVP | [~] | Admin token and HTTP API; no UI yet |
+| INFO panel | MVP | [x] | Callsign, team, sign-in link for another device (`/login#<token>`), team invite link, own position (copy), create a new team |
 | Kick a user (revoke a session) | MVP | [x] | Admin API; closes their connection and removes their marker for everyone |
 | CoT (Cursor-on-Target) bridge to real ATAK | Later | [ ] | Interop with ATAK devices |
 | AI agents ("Connect an agent") | MVP | [x] | Sub-users `<OWNER>-<NATO>`; a 3-line prompt (token + fetch `/agent`), REST `/api/v1`; read everything, write only in their own folder |

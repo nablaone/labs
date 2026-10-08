@@ -48,6 +48,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/join", s.handleJoin)
 	mux.HandleFunc("GET /api/me", s.withUser(s.handleMe))
 	mux.HandleFunc("GET /ws", s.handleWS)
+	mux.HandleFunc("GET /api/team/invite", s.humanOnly(s.handleTeamInvite))
+	mux.HandleFunc("POST /api/teams", s.humanOnly(s.handleUserCreateTeam))
 
 	// Agents: managed by people, used by AI agents through /api/v1.
 	mux.HandleFunc("GET /api/agents", s.humanOnly(s.handleListAgents))
@@ -81,10 +83,11 @@ func (s *Server) Handler() http.Handler {
 
 	files := http.FileServerFS(s.static)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		// SPA routes: the client resolves /join, /i/<item id> and /u/<user id>.
-		// They carry no data; objects are only ever sent to their team over /ws.
+		// SPA routes: the client resolves /join, /login, /i/<item id> and /u/<user id>.
+		// They carry no data (a /login token is in the #fragment, never sent);
+		// objects are only ever sent to their team over /ws.
 		p := r.URL.Path
-		if p == "/join" || strings.HasPrefix(p, "/i/") || strings.HasPrefix(p, "/u/") {
+		if p == "/join" || p == "/login" || strings.HasPrefix(p, "/i/") || strings.HasPrefix(p, "/u/") {
 			r.URL.Path = "/"
 		}
 		if p == "/sw.js" {
@@ -238,16 +241,8 @@ func (s *Server) handleListTeams(w http.ResponseWriter, _ *http.Request) {
 
 // handleCreateTeam creates a team; the response carries its invite link.
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
-		httpError(w, http.StatusBadRequest, "bad json")
-		return
-	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" || len(name) > 80 {
-		httpError(w, http.StatusBadRequest, "name must be 1-80 characters")
+	name, ok := decodeTeamName(w, r)
+	if !ok {
 		return
 	}
 	t, inv, err := s.store.CreateTeam(name)

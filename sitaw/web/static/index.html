@@ -33,6 +33,15 @@
     </form>
   </section>
 
+  <!-- Sign-in link from another device (/login#<session token>) -->
+  <section id="login" class="screen" hidden>
+    <div class="card">
+      <h1>sitaw</h1>
+      <p id="login-msg">Checking the sign-in link…</p>
+      <button id="login-go" type="button" class="btn primary" hidden>Sign in</button>
+    </div>
+  </section>
+
   <section id="noinvite" class="screen" hidden>
     <div class="card">
       <h1>sitaw</h1>
@@ -48,6 +57,7 @@
     <!-- Button column (top-right). Opening a menu hides it; the menu, and any
          panel opened from it, takes its place. -->
     <div id="fab">
+      <button class="fab" data-fab="info" aria-label="Info" title="Session info"><span data-icon="info"></span><span class="lbl">Info</span></button>
       <button class="fab" data-fab="view" aria-label="View" title="View"><span data-icon="layers"></span><span class="lbl">View</span></button>
       <button class="fab" data-fab="goto" aria-label="Go to" title="Go to"><span data-icon="navigate"></span><span class="lbl">Go to</span></button>
       <button class="fab" data-fab="objects" aria-label="Objects" title="Objects"><span data-icon="folder"></span><span class="lbl">Obj</span></button>
@@ -56,6 +66,7 @@
     </div>
 
     <!-- Menus: same place as the column, header bar with title and close -->
+    <section class="pop" data-pop="info" hidden><div class="sheet-bar"><span class="bar-title">Info</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
     <section class="pop" data-pop="view" hidden><div class="sheet-bar"><span class="bar-title">View</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
     <section class="pop" data-pop="goto" hidden><div class="sheet-bar"><span class="bar-title">Go to</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
     <section class="pop" data-pop="objects" hidden><div class="sheet-bar"><span class="bar-title">Objects</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>

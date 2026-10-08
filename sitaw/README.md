@@ -21,6 +21,10 @@ curl -XDELETE -H 'Authorization: Bearer secret' localhost:8080/api/admin/invites
 curl -XDELETE -H 'Authorization: Bearer secret' localhost:8080/api/admin/users/<user-id>         # remove member
 ```
 
+Members can also start a team themselves: **INFO** → **New team**. INFO also
+shows the team's invite link, your position, and a sign-in link that moves your
+session to another device (it is a password: keep it private).
+
 Each person in a team picks a unique callsign. Every object and person has a
 link (`/i/<id>`, `/u/<id>`) that only opens for members of that team.
 

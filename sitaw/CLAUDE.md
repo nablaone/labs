@@ -26,11 +26,13 @@ ship something.
   round-trip). All UI formatting goes through `js/coords.js` so other formats
   can be added later. Don't call `toMGRS` directly from UI code.
 - **Mobile first, map-first UI**: no bars. A column of labelled tiles in the
-  **top-right** (View, Go to, Objects, Draw). Opening one **hides the column**, and
+  **top-right** (Info, View, Go to, Objects, Draw, Agent). Opening one **hides the column**, and
   the menu takes its place: one fixed spot for menus and panels (`.pop`, `#sheet`),
   each with a header bar (title or "‹ back", plus ✕). Closing it, or tapping the
   map, brings the column back. The bottom-left corner shows callsign · team, center MGRS, GPS and
   server status (a Leaflet control, so the scale stacks above it).
+  - Info: callsign, team, sign-in link for another device (shown shortened, COPY
+    copies it whole), the team's invite link, own position (copy), and NEW TEAM.
   - View: base map, grid/team, per-folder show/hide. There are no per-type toggles.
   - Go to: a single search box. It accepts a position (MGRS, or lat/lon in
     decimal, DM or DMS, with or without N/S/E/W; `parseAnyCoord` in `coords.js`)
@@ -180,6 +182,14 @@ docs/FEATURES.md         ATAK-CIV feature map and sitaw status
   opens it becomes a separate user, so callsigns must be unique within the team
   (case-insensitive, 409 otherwise). The same callsign is fine in another team.
 - `GET /api/invites/<token>` (public) tells the join screen the team name.
+- Any person (not agents) can read their team's newest active invite
+  (`GET /api/team/invite`; none if an admin revoked them all) and create a team
+  (`POST /api/teams`, returns its invite token). Creating doesn't move you; you
+  join the new team through its link like anyone else.
+- **Sign-in link** `/login#<session token>` (INFO) moves a session to another
+  device: the token is in the fragment so it never reaches the server or its logs.
+  The login screen checks it with `GET /api/me`, asks before replacing this device's
+  session, and both devices then share one user (and one position).
 - Invite link `/join?t=<token>`. The user picks a callsign and gets a random session
   token (stored hashed server-side, in `localStorage` client-side). The WebSocket
   authenticates with `?token=` because browsers can't set headers on it.

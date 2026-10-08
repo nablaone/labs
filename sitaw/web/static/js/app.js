@@ -243,6 +243,7 @@ function startApp(session) {
     if (openPop === 'objects') renderObjects($('[data-pop="objects"] .pop-body'));
     if (openPop === 'view') renderView($('[data-pop="view"] .pop-body'));
     if (openPop === 'agents') renderAgents($('[data-pop="agents"] .pop-body'));
+    if (openPop === 'info') renderInfo($('[data-pop="info"] .pop-body'));
   };
   sync.addEventListener('status', updateServer);
   sync.addEventListener('reset', (e) => {
@@ -374,6 +375,7 @@ function startApp(session) {
     if (name === 'goto') renderGoto(body);
     if (name === 'objects') renderObjects(body);
     if (name === 'agents') renderAgents(body);
+    if (name === 'info') { inviteErr = null; renderInfo(body); }
     if (name === 'draw') $('.draw-into', pop).textContent = `New objects go to ${folderName(drawTarget())}`;
     pop.hidden = false;
     body.scrollTop = 0;
@@ -617,11 +619,105 @@ function startApp(session) {
     });
   }
 
+  // ----- info: this session, sign-in and invite links, position, new team -----
+  // The sign-in link carries the session token in the #fragment (never sent
+  // to the server). It is shown shortened; COPY copies the whole link.
+  const loginURL = () => `${location.origin}/login#${session.token}`;
+  const elide = (t) => (t.length > 12 ? `${t.slice(0, 4)}…${t.slice(-4)}` : '…');
+  let teamInvite = null; // invite token, fetched once per session
+  let inviteErr = null;   // why there is none; cleared when INFO is reopened
+
+  async function renderInfo(body) {
+    const pos = lastFix ? formatCoord(lastFix.lat, lastFix.lon) : null;
+    const field = (label, value, copy, extra = '') => `
+      <h4>${esc(label)}</h4>
+      <div class="frow">
+        <div class="prow"><span class="name">${value}</span>${extra}</div>
+        ${copy ? `<button class="mini" data-copy="${esc(copy)}" aria-label="Copy ${esc(label)}">${icon('copy')}</button>` : ''}
+      </div>`;
+    body.innerHTML = `
+      ${field('Callsign', esc(me.callsign))}
+      ${field('Team', esc(session.team?.name ?? '?'))}
+      ${field('Sign in on another device', `${esc(location.origin)}/login#${esc(elide(session.token))}`, 'login')}
+      <p class="empty">This link signs in as <b>${esc(me.callsign)}</b>. Treat it like a password.</p>
+      ${field('Invite to team', esc(teamInvite ? `${location.origin}/join?t=${teamInvite}`
+        : inviteErr ?? (navigator.onLine ? 'Loading…' : 'Needs a connection.')), teamInvite ? 'invite' : '')}
+      ${field('My position', pos ? esc(pos) : esc(gpsError ?? 'Waiting for GPS…'), pos ? 'pos' : '',
+        lastFix ? `<span class="meta">±${Math.round(lastFix.acc)} m · ${ago(lastFix.ts)}</span>` : '')}
+      ${lastFix ? `<p class="empty">${esc(formatDegrees(lastFix.lat, lastFix.lon))}</p>` : ''}
+      <div class="pop-actions"><button class="chip" data-act="new-team">${icon('plus')}New team</button></div>`;
+    body.onclick = async (e) => {
+      const t = e.target;
+      const what = t.closest('[data-copy]')?.dataset.copy;
+      if (what === 'login') copyText(loginURL(), 'Sign-in link copied · keep it private');
+      else if (what === 'invite') copyText(`${location.origin}/join?t=${teamInvite}`, 'Invite link copied');
+      else if (what === 'pos' && lastFix) copyText(formatCoord(lastFix.lat, lastFix.lon), 'Position copied');
+      else if (t.closest('[data-act="new-team"]')) openFrom('info', newTeamForm);
+    };
+    if (teamInvite || inviteErr || !navigator.onLine) return;
+    try {
+      teamInvite = (await api('GET', '/api/team/invite')).token;
+    } catch (ex) {
+      inviteErr = ex.message;
+    }
+    if (openPop === 'info') renderInfo(body);
+  }
+
+  function newTeamForm() {
+    const s = openSheet(`
+      <h2>New team</h2>
+      <p class="sub">Creates an empty team with its own invite link. You stay in
+        <b>${esc(session.team?.name ?? '?')}</b> until you join the new one.</p>
+      <label for="f-tname">Team name</label>
+      <input id="f-tname" maxlength="80" placeholder="e.g. Recon east">
+      <div class="row actions">
+        <button class="btn" data-a="cancel">Cancel</button>
+        <button class="btn primary" data-a="create">Create</button>
+      </div>`);
+    const input = $('#f-tname');
+    input.focus();
+    s.onclick = async (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'cancel') { closeSheet(); togglePop('info'); return; }
+      if (a !== 'create') return;
+      const name = input.value.trim();
+      if (!name) { toast('Give the team a name'); return; }
+      let res;
+      try {
+        res = await api('POST', '/api/teams', { name });
+      } catch (ex) {
+        toast(navigator.onLine ? `Could not create team: ${ex.message}` : 'Creating a team needs a connection.');
+        return;
+      }
+      showNewTeam(res.team, `${location.origin}/join?t=${res.token}`);
+    };
+  }
+
+  function showNewTeam(t, url) {
+    const s = openSheet(`
+      <h2>Team ${esc(t.name)}</h2>
+      <p class="sub">Share this invite link. Anyone who opens it can join the team.</p>
+      <textarea class="prompt link" readonly rows="2">${esc(url)}</textarea>
+      <p class="sub">Joining it on this device signs you out of <b>${esc(session.team?.name ?? '?')}</b>.
+        Copy your sign-in link from INFO first to come back.</p>
+      <div class="row actions">
+        <button class="btn" data-a="copy">${icon('copy')} Copy link</button>
+        <button class="btn primary" data-a="join">Join now</button>
+      </div>`);
+    s.onclick = (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'copy') copyText(url, 'Invite link copied');
+      else if (a === 'join') location.assign(url);
+    };
+  }
+
   // ----- agents -----
   // Your AI agents: sub-users named <YOU>-<NATO>, each with its own folder.
   // They read all team data and write only in their folder (server-enforced).
-  async function api(method, path) {
-    const r = await fetch(path, { method, headers: { Authorization: `Bearer ${session.token}` } });
+  async function api(method, path, json) {
+    const headers = { Authorization: `Bearer ${session.token}` };
+    if (json) headers['Content-Type'] = 'application/json';
+    const r = await fetch(path, { method, headers, body: json ? JSON.stringify(json) : undefined });
     const body = r.status === 204 ? null : await r.json().catch(() => null);
     if (!r.ok) throw new Error(body?.error ?? r.statusText);
     return body;
@@ -671,14 +767,7 @@ function startApp(session) {
       </div>`));
     $('#sheet').onclick = async (e) => {
       if (e.target.closest('[data-a]')?.dataset.a !== 'copy') return;
-      const ta = $('#sheet .prompt');
-      try {
-        await navigator.clipboard.writeText(ta.value);
-      } catch {
-        ta.select(); // no clipboard API (plain http): the text is selected for manual copy
-        document.execCommand?.('copy');
-      }
-      toast('Prompt copied');
+      copyText($('#sheet .prompt').value, 'Prompt copied');
     };
   }
 
@@ -831,7 +920,7 @@ function startApp(session) {
   // ----- panel (details, forms) -----
   // Opens in the same place as the menus (where the button column was), to keep
   // the map free. A panel opened from a menu shows "‹ <menu>" to go back to it.
-  const FAB_LABEL = { view: 'View', goto: 'Go to', objects: 'Obj', agents: 'Agent' };
+  const FAB_LABEL = { info: 'Info', view: 'View', goto: 'Go to', objects: 'Obj', agents: 'Agent' };
   let panelFrom = null; // menu the current panel was opened from, or null (map tap, link)
   function openFrom(menu, fn) {
     closePops();
@@ -1091,6 +1180,25 @@ function ago(ts) {
   return new Date(ts).toLocaleDateString();
 }
 
+// Copies text, falling back to a hidden textarea where the clipboard API is
+// missing (plain http on a phone).
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand?.('copy');
+    ta.remove();
+    if (!ok) { toast('Could not copy'); return; }
+  }
+  toast(done);
+}
+
 let toastTimer;
 function toast(msg) {
   const t = $('#toast');
@@ -1110,7 +1218,39 @@ const params = new URLSearchParams(location.search);
 const invite = location.pathname === '/join' ? params.get('t') : null;
 const session = loadSession();
 
-if (invite) showJoin(invite, session);
+// Sign-in link from another device: /login#<session token>. The token is in
+// the fragment so it never reaches server logs; it is dropped from the URL
+// before anything else runs.
+async function showLogin(token, session) {
+  history.replaceState(null, '', '/login');
+  $('#login').hidden = false;
+  const msg = $('#login-msg');
+  if (session?.token === token) { location.replace('/'); return; }
+  let me;
+  try {
+    const r = await fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } });
+    if (r.status === 401) { msg.textContent = 'This sign-in link is no longer valid.'; return; }
+    if (!r.ok) throw new Error(r.statusText);
+    me = await r.json();
+  } catch {
+    msg.textContent = 'Signing in needs a connection. Open the link again when you are online.';
+    return;
+  }
+  msg.innerHTML = `Sign in as <b>${esc(me.user.callsign)}</b> in team <b>${esc(me.team.name)}</b>.`;
+  if (session) msg.innerHTML += ` This device is signed in as <b>${esc(session.user?.callsign ?? '?')}</b> in team <b>${esc(session.team?.name ?? '?')}</b> now; this replaces it.`;
+  const go = $('#login-go');
+  go.hidden = false;
+  go.onclick = async () => {
+    await db.wipe();
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ user: me.user, team: me.team, token }));
+    location.replace('/');
+  };
+}
+
+const loginToken = location.pathname === '/login' ? location.hash.slice(1) : '';
+
+if (loginToken) showLogin(loginToken, session);
+else if (invite) showJoin(invite, session);
 else if (session) startApp(session);
 else {
   if (/^\/[iu]\//.test(location.pathname)) {
