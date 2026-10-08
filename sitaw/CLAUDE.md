@@ -55,6 +55,28 @@ ship something.
   "not part of your team". The local IndexedDB cache is stamped with its team
   (`kv.team`) and wiped if it doesn't match the session's team.
 
+## Visual design: utilitarian brutalism (decided)
+
+Usable over nice. The rules are in the header of `web/static/css/app.css`.
+Follow them for anything new:
+- No rounded corners, shadows, blur, gradients or transitions. Panels are
+  opaque, with visible 2px borders (`--line`).
+- One font: the **system monospace** stack (`--font`), with no web font to download.
+  Labels and headings are UPPERCASE. Units stay lowercase (`m`, `km`), so never
+  uppercase distances. Digits are tabular.
+- Light panels by default (white, black ink). One signal color (`--signal`, yellow)
+  marks active/selected. Red only for danger, green only for ok/live. State is
+  shown as icon + text, never color alone. Pressed = inverted (ink <-> paper).
+- Main controls are square tiles with an icon **and** a text label (VIEW / GO TO /
+  OBJ / DRAW; the draw fan and drawing controls are labelled too), joined into
+  stacks with shared borders.
+- Every sheet has an explicit ✕ close button (`.sheet-x`, added by `openSheet`).
+- Colors only come from the CSS tokens. **Night mode** (`html[data-night]`,
+  toggled in View, stored in prefs, applied pre-paint by an inline script in
+  index.html) swaps the tokens to red-on-black, and runs the map tiles through
+  the SVG `#night-red` color matrix (luminance -> 45% red, no green or blue).
+  Object colors stay so they remain distinguishable.
+
 ## Layout
 
 ```

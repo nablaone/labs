@@ -84,7 +84,7 @@ async function showJoin(invite, session) {
 // are shown, and where new objects go. Folder visibility is stored only once
 // the user toggles it; until then folderVisible() picks the default.
 function loadPrefs() {
-  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, folded: {} };
+  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, folded: {}, night: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY));
     if (!p) return def;
@@ -94,6 +94,7 @@ function loadPrefs() {
       folders: p.folders ?? {},
       drawFolder: p.drawFolder ?? null,
       folded: p.folded ?? {},
+      night: !!p.night,
     };
   } catch {
     return def;
@@ -202,6 +203,9 @@ function startApp(session) {
     for (const [k, l] of Object.entries(overlays)) {
       if (prefs.show[k]) l.addTo(map); else l.remove();
     }
+    // Night: red-on-black UI and a dimmed red map, to keep dark adaptation.
+    document.documentElement.toggleAttribute('data-night', prefs.night);
+    $('meta[name="theme-color"]').content = prefs.night ? '#000000' : '#ffffff';
     savePrefs(prefs);
   }
   applyPrefs();
@@ -389,6 +393,7 @@ function startApp(session) {
       <div class="chips">
         ${chip('data-show', 'grid', 'grid', 'Grid', prefs.show.grid)}
         ${chip('data-show', 'team', 'user', 'Team', prefs.show.team)}
+        ${chip('data-night', 'night', 'moon', 'Night', prefs.night)}
       </div>
       <h4>Folders</h4>
       <div class="pop-actions">
@@ -409,6 +414,7 @@ function startApp(session) {
       const vis = t.closest('[data-vis]')?.dataset.vis;
       if (base) { prefs.base = base; applyPrefs(); }
       else if (show) { prefs.show[show] = !prefs.show[show]; applyPrefs(); }
+      else if (t.closest('[data-night]')) { prefs.night = !prefs.night; applyPrefs(); }
       else if (fid) setFolderVisible(fid, !folderVisible(fid));
       else if (vis) {
         for (const f of folders) prefs.folders[f.id] = vis === 'all' || f.id === myFolder();
@@ -508,8 +514,10 @@ function startApp(session) {
     <span class="meta">${dist([p.lat, p.lon])} · ${ago(p.ts)}</span></button>`;
   const folderButton = (f) => `<button class="prow" data-item="${esc(f.id)}">${icon('folder')}<span class="name">${esc(f.name)}</span>
     <span class="meta">${objectsIn(f.id).length}</span></button>`;
-  const objectRow = (i, meta, showFolder = false) => `<button class="prow${folderVisible(folderOf(i)) ? '' : ' dim'}" data-item="${esc(i.id)}" style="color:${esc(i.color || DEFAULT_COLORS[i.kind])}">${icon(KIND_ICON[i.kind])}
-    <span class="name" style="color:var(--fg)">${esc(i.name || KIND_LABEL[i.kind])}</span>
+  // Only the icon carries the object's color; text stays ink for legibility.
+  const objectRow = (i, meta, showFolder = false) => `<button class="prow${folderVisible(folderOf(i)) ? '' : ' dim'}" data-item="${esc(i.id)}">
+    <span class="swatch-icon" style="color:${esc(i.color || DEFAULT_COLORS[i.kind])}">${icon(KIND_ICON[i.kind])}</span>
+    <span class="name">${esc(i.name || KIND_LABEL[i.kind])}</span>
     <span class="meta">${showFolder ? `${esc(folderName(folderOf(i)))} · ` : ''}${esc(meta)}</span></button>`;
 
   // Objects: every folder with its objects. Picking an object opens its details.
@@ -535,8 +543,9 @@ function startApp(session) {
             <button class="prow${folderVisible(f.id) ? '' : ' dim'}" data-toggle="${esc(f.id)}" aria-expanded="${open}">
               <span class="chev${open ? ' open' : ''}">${icon('chevron')}</span>${icon(folderVisible(f.id) ? 'folder' : 'eyeOff')}
               <span class="name">${esc(f.name)}</span>
+              ${owner ? `<span class="tag" title="Personal folder">${icon('user')}</span>` : ''}
               ${f.id === target ? `<span class="tag" title="New objects go here">${icon('star')}</span>` : ''}
-              <span class="meta">${owner ? 'personal · ' : ''}${objs.length}</span>
+              <span class="meta">${objs.length}</span>
             </button>
             <button class="mini" data-folder-menu="${esc(f.id)}" aria-label="Folder options">${icon('more')}</button>
           </div>
@@ -599,7 +608,7 @@ function startApp(session) {
     onChange: (kind, n, min) => {
       $('#drawctl').hidden = !kind;
       $('[data-fab="draw"]').classList.toggle('active', !!kind);
-      $('[data-fab="draw"]').innerHTML = icon(kind ? 'x' : 'pencil');
+      $('[data-fab="draw"]').innerHTML = `${icon(kind ? 'x' : 'pencil')}<span class="lbl">${kind ? 'Cancel' : 'Draw'}</span>`;
       if (!kind) return;
       const into = ` → ${folderName(drawTarget())}`;
       $('#draw-hint').textContent = kind === 'waypoint'
@@ -720,10 +729,12 @@ function startApp(session) {
   // ----- bottom sheet -----
   function openSheet(html) {
     const s = $('#sheet');
-    $('.sheet-body', s).innerHTML = html;
+    $('.sheet-body', s).innerHTML = `<button class="sheet-x" data-sheet-close aria-label="Close">${icon('x')}</button>${html}`;
     s.hidden = false;
+    s.scrollTop = 0;
     return s;
   }
+  $('#sheet').addEventListener('click', (e) => { if (e.target.closest('[data-sheet-close]')) closeSheet(); });
   function hideSheet() {
     $('#sheet').hidden = true;
   }

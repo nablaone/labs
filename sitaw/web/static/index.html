@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#1f2a1f">
+  <meta name="theme-color" content="#ffffff">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>sitaw</title>
@@ -11,8 +11,16 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/css/app.css">
+  <script>try { if (JSON.parse(localStorage.getItem('sitaw.view'))?.night) document.documentElement.setAttribute('data-night', ''); } catch {}</script>
 </head>
 <body>
+  <!-- Night mode map filter: red = 45% of luminance, green and blue off. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="night-red" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix" values="0.135 0.265 0.05 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/>
+    </filter>
+  </svg>
+
   <!-- Join / auth screen -->
   <section id="join" class="screen" hidden>
     <form id="join-form" class="card">
@@ -41,23 +49,23 @@
     <div id="fab">
       <div class="fab-slot">
         <div class="pop" data-pop="view" hidden></div>
-        <button class="fab" data-fab="view" aria-label="View" title="View"><span data-icon="layers"></span></button>
+        <button class="fab" data-fab="view" aria-label="View" title="View"><span data-icon="layers"></span><span class="lbl">View</span></button>
       </div>
       <div class="fab-slot">
         <div class="pop" data-pop="goto" hidden></div>
-        <button class="fab" data-fab="goto" aria-label="Go to" title="Go to"><span data-icon="navigate"></span></button>
+        <button class="fab" data-fab="goto" aria-label="Go to" title="Go to"><span data-icon="navigate"></span><span class="lbl">Go to</span></button>
       </div>
       <div class="fab-slot">
         <div class="pop" data-pop="objects" hidden></div>
-        <button class="fab" data-fab="objects" aria-label="Objects" title="Objects"><span data-icon="folder"></span></button>
+        <button class="fab" data-fab="objects" aria-label="Objects" title="Objects"><span data-icon="folder"></span><span class="lbl">Obj</span></button>
       </div>
       <div class="fab-slot">
         <div class="pop fan" data-pop="draw" hidden>
-          <button class="fab sm" data-draw-kind="area" aria-label="Area" title="Area"><span data-icon="area"></span></button>
-          <button class="fab sm" data-draw-kind="line" aria-label="Line" title="Line"><span data-icon="line"></span></button>
-          <button class="fab sm" data-draw-kind="waypoint" aria-label="Waypoint" title="Waypoint"><span data-icon="point"></span></button>
+          <button class="fab sm" data-draw-kind="area" aria-label="Area" title="Area"><span data-icon="area"></span><span class="lbl">Area</span></button>
+          <button class="fab sm" data-draw-kind="line" aria-label="Line" title="Line"><span data-icon="line"></span><span class="lbl">Line</span></button>
+          <button class="fab sm" data-draw-kind="waypoint" aria-label="Waypoint" title="Waypoint"><span data-icon="point"></span><span class="lbl">Point</span></button>
         </div>
-        <button class="fab" data-fab="draw" aria-label="Draw" title="Draw"><span data-icon="pencil"></span></button>
+        <button class="fab" data-fab="draw" aria-label="Draw" title="Draw"><span data-icon="pencil"></span><span class="lbl">Draw</span></button>
       </div>
     </div>
 
@@ -65,10 +73,10 @@
     <div id="drawctl" hidden>
       <div id="draw-hint" class="hint"></div>
       <div class="fan-row">
-        <button class="fab sm" data-draw="cancel" aria-label="Cancel" title="Cancel"><span data-icon="x"></span></button>
-        <button class="fab sm" data-draw="undo" aria-label="Undo" title="Undo"><span data-icon="undo"></span></button>
-        <button class="fab" data-draw="center" aria-label="Add point at crosshair" title="Add at crosshair"><span data-icon="plus"></span></button>
-        <button class="fab sm ok" data-draw="done" aria-label="Done" title="Done"><span data-icon="check"></span></button>
+        <button class="fab sm" data-draw="cancel" aria-label="Cancel" title="Cancel"><span data-icon="x"></span><span class="lbl">Cancel</span></button>
+        <button class="fab sm" data-draw="undo" aria-label="Undo" title="Undo"><span data-icon="undo"></span><span class="lbl">Undo</span></button>
+        <button class="fab" data-draw="center" aria-label="Add point at crosshair" title="Add at crosshair"><span data-icon="plus"></span><span class="lbl">Add ✛</span></button>
+        <button class="fab sm ok" data-draw="done" aria-label="Done" title="Done"><span data-icon="check"></span><span class="lbl">Done</span></button>
       </div>
     </div>
 
