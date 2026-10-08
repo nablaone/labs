@@ -1,168 +1,155 @@
-# sitaw — feature list
+# sitaw: roadmap and feature list
 
-Source: ATAK Civilian 4.0 Software User Manual (TAK Product Center, 2020),
-sections listed in its table of contents. Each ATAK-CIV feature is mapped to a
-sitaw scope:
+sitaw is for **a small group that wants to navigate and stay aware of each
+other**: friends on a hike, a search party, an event crew. It borrows from
+ATAK-CIV, but leaves out what is military (symbology, fire support) or heavy
+(terrain analysis, video, radios).
 
-- **MVP**: in the first working version
-- **Next**: planned, after the MVP is stable
-- **Later**: maybe, low priority
-- **No**: out of scope for a lightweight web client
+## Roadmap
 
-Status: `[x]` done, `[~]` scaffolded / partial, `[ ]` not started.
-The backend `[x]` items are covered by Go tests. The frontend `[x]` items are
-implemented but have not been tested by hand in a browser yet.
+The app already shares where everyone is and what has been marked. The gap is
+helping people **get somewhere**, **talk**, and **notice when something
+changes**. Items are listed in order of priority; size is S (a day or so) or M (a few days).
 
-## 1. Map display
+### Next: navigate and stay together
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| # | Feature | Why | Size | Status |
+|---|---|---|---|---|
+| 1 | **Navigate to** (object, person, MGRS) | A live line from you to the target with distance, bearing, ETA and a turn arrow; works offline ("Bloodhound" in ATAK) | M | [ ] |
+| 2 | **Team chat** | "Meet at RV-1", "running late". One channel per team over the existing socket, queued offline, unread badge | M | [ ] |
+| 3 | **Breadcrumbs / tracks** | A trail behind each marker, and "where was BRAVO in the last hour". Needs a retention decision (24 h? 7 days?) | M | [ ] |
+| 4 | **Range & bearing tool** | Tap two points (or person to object) for distance and bearing; reuses the line labels | S | [ ] |
+| 5 | **Download map area** | Pre-fetch tiles (zoom 10–16) for an area before going out of signal | S | [ ] |
+| 6 | **Screen awake + heading** | Wake Lock while navigating; your marker shows which way you face | S | [ ] |
+
+**First slice:** 1 + 6 + 7. That makes the app useful on a walk: see everyone,
+get taken to them, and shout if something is wrong. Then 2 and 3.
+
+### Then: awareness that comes to you
+
+| # | Feature | Why | Size | Status |
+|---|---|---|---|---|
+| 7 | **Help request** | "I need help / come to me": a loud banner for everyone, with navigate-to-me (the civilian emergency beacon) | S | [ ] |
+| 8 | **Proximity alerts** | Notify when someone enters an area or comes within N m; or "warn if anyone is more than 1 km from the group" | M | [ ] |
+| 9 | **Routes** | Follow a line: next point, distance remaining, off-route warning (builds on 1) | M | [ ] |
+| 10 | **GPX / KML import and export** | Bring in a hiking route; export what was marked | S | [ ] |
+| 11 | **Photos on objects** | "The gate is locked here"; needs file storage | M | [ ] |
+
+### Later, maybe
+
+- **Shapes:** circles and range rings ("within 500 m of camp"), editing vertices of lines and areas.
+- **Elevation profile of a line:** needs an elevation data source.
+- **Lat/lon display option:** for people who don't read MGRS (input already accepts degrees).
+- **Push notifications while the app is closed:** web push is weak on iOS.
+- **Admin page:** an in-app page for teams, invites and members, instead of `curl`.
+- **MCP server for agents:** the same tools as the REST API.
+
+### Not doing
+
+Too military for this app, or too heavy:
+
+- **Symbology:** affiliations (friendly/hostile/neutral), MIL-STD-2525 icons, tactical rectangle overlays.
+- **Fire support:** bullseye, 9-line / CASEVAC / call-for-fire forms, digital pointer, telestrate.
+- **Terrain:** viewshed, contour lines, 3D / DTED.
+- **Media and radios:** video feeds / KLV, radio and rover control, VoIP/SMS integration.
+- **ATAK plumbing:** data packages; a CoT bridge to real ATAK devices (only if someone in the group runs ATAK).
+
+## Feature status
+
+Mapped from the ATAK Civilian 4.0 user manual, plus what sitaw adds.
+Status: `[x]` done, `[~]` partial, `[ ]` not started. Scope: **Done** (shipped),
+**Roadmap #n**, **Later**, **No** (not doing).
+
+### Map and coordinates
+
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| Moving map, pan / pinch zoom | MVP | [x] | Leaflet |
-| Online base maps | MVP | [x] | OpenTopoMap is the default; OSM is the alternative |
-| Map layer switching ("Maps & Favorites") | MVP | [x] | Layer control |
-| Offline maps (cached tiles) | MVP | [~] | Service worker caches tiles you view; "cache this area" button is Next |
-| Bookmark a location (favorites) | Next | [ ] | |
-| North-up / track-up, manual rotation | Later | [ ] | Leaflet has no native rotation |
-| Center on self, lock to self | MVP | [x] | "Me" button, follow mode |
-| Map scale | MVP | [x] | |
-| Coordinate display of map center / cursor | MVP | [x] | MGRS |
-| 3D view, 3D models (DTED) | No | | |
-| Rubber sheet (georeference an image) | Later | [ ] | |
+| Moving map, pan / pinch zoom | Done | [x] | Leaflet |
+| Base maps: OpenTopoMap, OSM | Done | [x] | Switch in View |
+| MGRS coordinates and grid overlay | Done | [x] | Grid from 100 km down to 100 m, by zoom |
+| Coordinate input: MGRS, lat/lon (DD, DM, DMS) | Done | [x] | Go to search |
+| Lat/lon display | Later | [ ] | Display is MGRS only |
+| Center on self, follow mode | Done | [x] | |
+| Night mode | Done | [x] | Red on black; map reduced to dim red |
+| Offline tiles for viewed areas | Done | [x] | Service worker, capped cache |
+| Download map area | Roadmap #5 | [ ] | |
+| Bookmarks / favorites | Later | [ ] | Waypoints cover most of it |
+| Map rotation (track-up) | Later | [ ] | Leaflet has no native rotation |
+| 3D, DTED, rubber sheet | No | | |
 
-## 2. Coordinates and grid
+### Team awareness
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| MGRS coordinates everywhere | MVP | [x] | Default and, for now, the only format |
-| MGRS grid overlay | MVP | [x] | 100 km / 10 km / 1 km lines, chosen by zoom |
-| Enter coordinate / MGRS location | MVP | [~] | Go to search accepts MGRS and lat/lon (decimal, DM, DMS); placing a point by typed coordinate is Next |
-| Other formats (lat/lon DD, DMS, UTM) | Next | [~] | Input: DD/DM/DMS accepted in Go to. Display is still MGRS only (`coords.js`) |
-| Go To tool | MVP | [x] | MGRS input |
+| Own position from GPS, shared with the team | Done | [x] | A Position object in your folder |
+| Manual position / location unknown | Done | [x] | Set at the crosshair (sticks until USE GPS), or remove |
+| Team marks with callsign | Done | [x] | Live / stale (>5 min) / lost (>30 min) / manual |
+| GPS accuracy circle, GPS diagnostics | Done | [x] | Tap the status: needs HTTPS, denied, off, timeout |
+| Team list and search | Done | [x] | Go to: roster, distance, last seen |
+| Breadcrumbs / track history | Roadmap #3 | [ ] | No history is stored today |
+| Heading on your marker | Roadmap #6 | [ ] | |
+| Help request (emergency beacon) | Roadmap #7 | [ ] | |
+| Proximity alerts / geofence | Roadmap #8 | [ ] | |
+| Roles (lead, medic, ...) | Later | [ ] | |
+| Affiliations, MIL-STD-2525 | No | | |
 
-## 3. Self marker and team presence (SA)
+### Marking the map
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| Self-marker from GPS | MVP | [x] | `navigator.geolocation.watchPosition` |
-| Send own position to the team | MVP | [x] | Throttled, over WebSocket |
-| Show other users' positions | MVP | [x] | Colored circle and callsign label |
-| Stale / no-GPS indicator | MVP | [x] | Markers fade when a position is old |
-| Callsign | MVP | [x] | Set when joining |
-| Team color | MVP | [~] | One team for now, one color |
-| Roles (Team Lead, HQ, Medic, ...) | Next | [ ] | Letter inside the circle |
-| GPS error circle | MVP | [x] | Accuracy circle |
-| Tracking breadcrumbs (own and others) | Next | [ ] | Server keeps a short track history |
-| Track history / track search | Later | [ ] | |
-| Multiple teams | MVP | [x] | Multi-tenant: a team is created with its invite link; data is isolated per team |
+| Waypoint, line, area | Done | [x] | Waypoint: diamond on a point circle |
+| Name, remarks, color, folder | Done | [x] | |
+| Line length and grid bearing per segment, area size | Done | [x] | Shown when zoomed in |
+| Line start dot and end arrow | Done | [x] | |
+| Folders: personal and shared, show/hide | Done | [x] | One current folder for new objects |
+| Object links (`/i/<id>`) | Done | [x] | Open only for team members |
+| Circles, range rings | Later | [ ] | |
+| Edit vertices | Later | [ ] | Name, color, folder and delete work |
+| Photos / attachments | Roadmap #11 | [ ] | |
+| GPX / KML import and export | Roadmap #10 | [ ] | |
+| Telestrate, tactical rectangles, iconsets | No | | |
 
-## 4. Placement (points)
+### Navigation
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| Point Dropper: drop a marker by tapping | MVP | [x] | Waypoint |
-| Affiliations: Unknown / Neutral / Hostile / Friendly | Next | [ ] | Simple colored shapes, not full MIL-STD-2525 |
-| Custom name prefix and auto-index | Next | [ ] | Default names are `WP-1`, `WP-2`, ... |
-| Recently added list | MVP | [x] | Objects menu: folders with their objects |
-| Details: name, remarks, color, coordinate | MVP | [x] | Edit sheet |
-| Elevation of a point | Later | [ ] | Would need a DEM |
-| Attachments, images (Quick Pic, Gallery) | Later | [ ] | |
-| Send / broadcast marker | MVP | [x] | Every item is broadcast to the team automatically |
-| Auto send (periodic re-broadcast) | No | | Server state and sync on reconnect replace this |
-| Custom iconsets | Later | [ ] | |
-| Red X (inspect a point's coordinates) | Next | [ ] | Plan: long-press shows the MGRS of that point |
+| Go to (fly the map to a place) | Done | [x] | |
+| Navigate to (Bloodhound) | Roadmap #1 | [ ] | Distance, bearing, ETA, turn arrow |
+| Range & bearing tool | Roadmap #4 | [ ] | |
+| Routes with checkpoints | Roadmap #9 | [ ] | |
+| Elevation profile | Later | [ ] | |
+| Bullseye, digital pointer, viewshed | No | | |
 
-## 5. Drawing tools
+### Communication
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| Polyline (open free form) | MVP | [x] | "Line" |
-| Polygon (closed free form) | MVP | [x] | "Area" |
-| Circle (center and radius, rings) | Next | [ ] | |
-| Rectangle (3-point, tactical overlay) | Next | [ ] | |
-| Telestrate (finger freehand) | Later | [ ] | |
-| Color, opacity, line thickness | MVP | [~] | Color is supported; width and opacity are Next |
-| Edit vertices, move or delete a shape | Next | [ ] | Delete and rename work in the MVP |
-| Labels (length, area) | Next | [ ] | |
-| Geofence (entry / exit alerts on a shape) | Later | [ ] | |
+| Team chat | Roadmap #2 | [ ] | |
+| Direct messages, quick messages | Later | [ ] | |
+| Video, radio, VoIP, SMS | No | | |
 
-## 6. Measurement and navigation
+### Server, sync and accounts
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| Range & Bearing line | Next | [ ] | Distance and azimuth between two points |
-| R&B circle / range rings | Next | [ ] | |
-| Bullseye | Later | [ ] | |
-| Routes (create, checkpoints, KML/GPX import and export) | Later | [ ] | Lines cover the MVP need |
-| Navigate-to (Quick Nav, Bloodhound) | Next | [ ] | Distance, bearing and ETA from self to a target |
-| Elevation profile, viewshed, contour lines | No | | |
-| Digital pointer | Later | [ ] | |
+| Single Go binary, embedded PWA | Done | [x] | |
+| SQLite storage, automatic migrations | Done | [x] | |
+| Multiple teams, isolated data | Done | [x] | |
+| Invite link per team, unique callsigns | Done | [x] | |
+| Sign-in link to move a session to another device | Done | [x] | INFO panel |
+| WebSocket sync, last-write-wins, offline outbox | Done | [x] | |
+| External address config (`SITAW_BASE_URL`) | Done | [x] | Needed behind proxies / tailscale serve |
+| AI agents: sub-users, REST `/api/v1`, geo API | Done | [x] | Agents write only in their own folder |
+| Admin API: teams, invites, remove members | Done | [~] | No admin UI yet (Later) |
+| TLS | Done | [~] | Via a reverse proxy or tunnel |
+| MCP server for agents | Later | [ ] | |
+| CoT bridge to ATAK | No | | Unless the group uses ATAK |
 
-## 7. Communication
+### Mobile UX
 
-| ATAK-CIV feature | sitaw scope | Status | Notes |
+| Feature | Scope | Status | Notes |
 |---|---|---|---|
-| Contacts list | MVP | [~] | Team list with last-seen time, tap to pan |
-| GeoChat: team ("All Chat Rooms") | Next | [ ] | Same WebSocket channel |
-| GeoChat: direct messages, groups | Later | [ ] | |
-| Pre-defined quick messages | Later | [ ] | |
-| Emergency beacon (Alert / In Contact / Ring the Bell) | Next | [ ] | Loud alert shown to everyone |
-| Video player, KLV | No | | |
-| Radio controls, rover | No | | |
-| VoIP / SMS / email | No | | |
-
-## 8. Data management
-
-| ATAK-CIV feature | sitaw scope | Status | Notes |
-|---|---|---|---|
-| Overlay Manager (toggle categories) | MVP | [x] | Per-folder show/hide in View; by default only your own folder is shown |
-| Folders / packs (flat) | MVP | [x] | Personal folder per user; shared folders anyone can create, rename or delete when empty; move objects between folders |
-| Object search | MVP | [x] | Go to: one box for people, objects, folders and coordinates; flies to the result |
-| Multi-select export and delete | Later | [ ] | |
-| Data packages (send bundles) | No | | Everything is shared already |
-| Import Manager (KML, KMZ, GPX, GeoJSON) | Next | [ ] | GeoJSON first |
-| Export (KML, GPX, GeoJSON) | Next | [ ] | |
-| Hashtags and sticky tags | Later | [ ] | |
-| Clear Content (wipe local data) | Later | [~] | No user-facing button; local data is wiped automatically when a removed user's session is rejected, or when joining another team |
-| Encryption at rest | No | | Use HTTPS; the browser storage is the device's concern |
-
-## 9. Network and server (what replaces the TAK Server)
-
-| Capability | sitaw scope | Status | Notes |
-|---|---|---|---|
-| Single Go binary, embedded web UI | MVP | [x] | No external database |
-| WebSocket sync with full snapshot on connect | MVP | [x] | |
-| Last-write-wins merge with tombstones | MVP | [x] | Offline edits converge |
-| Persistence | MVP | [x] | SQLite (`data/sitaw.db`); old JSON state is imported once |
-| Invitation-link auth | MVP | [x] | One shared link per team; callsigns are unique within a team (case-insensitive) |
-| Object links (`/i/<id>`, `/u/<id>`) | MVP | [x] | Selecting an object changes the URL; links open only for team members |
-| Admin: teams, invites, members | MVP | [~] | Admin token and HTTP API; no UI yet |
-| INFO panel | MVP | [x] | Callsign, team, sign-in link for another device (`/login#<token>`), team invite link, own position (copy), create a new team |
-| Kick a user (revoke a session) | MVP | [x] | Admin API; closes their connection and removes their marker for everyone |
-| CoT (Cursor-on-Target) bridge to real ATAK | Later | [ ] | Interop with ATAK devices |
-| AI agents ("Connect an agent") | MVP | [x] | Sub-users `<OWNER>-<NATO>`; a 3-line prompt (token + fetch `/agent`), REST `/api/v1`; read everything, write only in their own folder |
-| Geo API (convert, measure, nearby, inside) | MVP | [x] | For agents; MGRS or degrees in, both out |
-| MCP server for agents | Later | [ ] | Same API exposed as MCP tools |
-| TLS | MVP | [~] | Expected behind a reverse proxy (Caddy) |
-
-## 10. Offline behavior
-
-| Capability | sitaw scope | Status | Notes |
-|---|---|---|---|
-| App shell works offline (PWA, service worker) | MVP | [x] | |
-| Last known team state shown offline | MVP | [x] | Cached in IndexedDB |
-| Create, edit and delete items offline | MVP | [x] | IndexedDB outbox, flushed on reconnect |
-| Own position while offline | MVP | [x] | Position is an object: the latest fix waits in the outbox and syncs on reconnect |
-| Manual position / location unknown | MVP | [x] | Set at the crosshair when GPS is off (sticks until USE GPS), or remove it ("unknown") |
-| Tile cache for viewed areas | MVP | [x] | Cache-first, capped size |
-| Pre-download an area's tiles | Next | [ ] | |
-| Connection state indicator | MVP | [x] | |
-
-## 11. Mobile UX
-
-| Capability | sitaw scope | Status |
-|---|---|---|
-| Large touch targets (at least 56 px buttons) | MVP | [x] |
-| Bottom toolbar reachable with a thumb | MVP | [x] |
-| Installable PWA (manifest) | MVP | [x] |
-| Keep screen awake (Wake Lock API) | Next | [ ] |
-| Dark / night mode | Next | [ ] |
+| Large labelled tiles, panels in one place | Done | [x] | Top-right column |
+| Installable PWA, works offline | Done | [x] | |
+| Keep screen awake | Roadmap #6 | [ ] | Wake Lock API |
+| Push notifications when closed | Later | [ ] | |

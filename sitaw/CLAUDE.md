@@ -2,9 +2,13 @@
 
 Lightweight, web-based ATAK-CIV equivalent: teams share live positions,
 waypoints, lines and areas on a map. One server hosts many teams (multi-tenant). It replaces a TAK Server with a single Go
-binary and a vanilla-JS PWA. The feature scope, mapped from the ATAK-CIV user
-guide, is in `docs/FEATURES.md`. Keep its status column up to date when you
-ship something.
+binary and a vanilla-JS PWA.
+
+**Audience:** a small group that wants to navigate and stay aware of each other
+(friends on a hike, a search party). It is not a military tool. The roadmap, and
+what is deliberately out of scope (symbology, fire support, terrain analysis,
+video and radios), is in `docs/FEATURES.md`. Keep its status columns up to date when
+you ship something, and check the "Not doing" list before adding ATAK features.
 
 ## Stack and constraints
 
@@ -110,7 +114,7 @@ web/static/
   js/mgrsgrid.js         Leaflet MGRS grid overlay
   js/coords.js           coordinate format abstraction
   js/icons.js            inline SVG icon set
-docs/FEATURES.md         ATAK-CIV feature map and sitaw status
+docs/FEATURES.md         roadmap, feature status, and what we won't build
 ```
 
 ## Folders

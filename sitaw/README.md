@@ -65,4 +65,4 @@ SITAW_BASE_URL=https://<machine>.<tailnet>.ts.net go run ./cmd/sitaw
 | `SITAW_ADMIN_TOKEN` | | random per run | bearer token for `/api/admin` |
 | `SITAW_IMPORT_JSON` | `-import-json` | `data/sitaw.json` | old state file, imported once |
 
-See `docs/FEATURES.md` for scope and `CLAUDE.md` for architecture.
+See `docs/FEATURES.md` for the roadmap and `CLAUDE.md` for architecture.
