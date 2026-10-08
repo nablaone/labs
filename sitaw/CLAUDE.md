@@ -25,9 +25,11 @@ ship something.
 - **Coordinates**: MGRS everywhere (`js/mgrs.js`, hand-written and tested by
   round-trip). All UI formatting goes through `js/coords.js` so other formats
   can be added later. Don't call `toMGRS` directly from UI code.
-- **Mobile first, map-first UI**: no bars. Translucent round buttons in the
-  **top-right** (View, Go to, Objects, Draw) open popovers, or a fan of icons, to
-  their left. The bottom-left corner shows callsign · team, center MGRS, GPS and
+- **Mobile first, map-first UI**: no bars. A column of labelled tiles in the
+  **top-right** (View, Go to, Objects, Draw). Opening one **hides the column**, and
+  the menu takes its place: one fixed spot for menus and panels (`.pop`, `#sheet`),
+  each with a header bar (title or "‹ back", plus ✕). Closing it, or tapping the
+  map, brings the column back. The bottom-left corner shows callsign · team, center MGRS, GPS and
   server status (a Leaflet control, so the scale stacks above it).
   - View: base map, grid/team, per-folder show/hide. There are no per-type toggles.
   - Go to: a single search box. It accepts a position (MGRS, or lat/lon in
@@ -45,7 +47,7 @@ ship something.
     folder; `setCurrentFolder`). Tapping another folder makes it current, which
     unfolds it and folds the previous one. The list only; map visibility is View.
   - Details and forms open in a **panel in the same place as the menus**
-    (`#sheet`, `openSheet`), aligned with the tile it came from. A panel opened from a
+    (`#sheet`, `openSheet`). A panel opened from a
     menu (`openFrom('objects', …)`) has a "‹ OBJ" back button; one opened from a
     map tap or link does not. Its action row is sticky at the bottom. There is no
     bottom sheet and no `alert`/`confirm`.

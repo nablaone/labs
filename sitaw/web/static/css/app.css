@@ -96,8 +96,7 @@ html[data-night] .leaflet-overlay-pane, html[data-night] .leaflet-marker-pane { 
 /* --- right-hand button column: one joined stack of labelled tiles --- */
 #fab { position: absolute; z-index: 1000; right: calc(8px + var(--safe-r)); top: calc(8px + var(--safe-t));
   display: flex; flex-direction: column; }
-.fab-slot { position: relative; }
-.fab-slot + .fab-slot { margin-top: calc(-1 * var(--line)); } /* shared borders */
+#fab .fab + .fab { margin-top: calc(-1 * var(--line)); } /* shared borders */
 .fab { width: 60px; min-height: 60px; padding: 6px 2px 4px; border: var(--line) solid var(--rule); background: var(--paper); color: var(--ink);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; }
 .fab .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; line-height: 1; white-space: nowrap; }
@@ -109,15 +108,21 @@ html[data-night] .leaflet-overlay-pane, html[data-night] .leaflet-marker-pane { 
 .fab.sm { width: 56px; min-height: 56px; }
 .fab.sm .i { width: 22px; height: 22px; }
 
-/* popover: attached to the left of its tile, grows downward */
-.pop { position: absolute; right: calc(100% + 6px); top: 0; width: min(320px, calc(100vw - 88px));
-  max-height: calc(100vh - 260px - var(--safe-t) - var(--safe-b)); overflow: auto;
-  background: var(--paper); color: var(--ink); border: var(--line) solid var(--rule); padding: 0 10px 10px; }
+/* Menus and panels share one place: the top-right corner, where the button
+   column is (the column hides while one is open). Bottom stays clear of the
+   status block. */
+.pop, #sheet { position: absolute; z-index: 1100; top: calc(8px + var(--safe-t)); right: calc(8px + var(--safe-r));
+  width: min(360px, calc(100vw - 16px)); max-height: calc(100% - 140px - var(--safe-t) - var(--safe-b));
+  background: var(--paper); color: var(--ink); border: var(--line) solid var(--rule); }
+.pop { display: flex; flex-direction: column; }
+.pop-body { overflow: auto; padding: 0 10px 10px; min-height: 0; }
 /* Objects stays open while you browse, so keep the lower map visible. */
-.pop[data-pop="objects"] { max-height: min(46vh, calc(100vh - 260px - var(--safe-t) - var(--safe-b))); }
-.pop.fan { width: auto; padding: 0; border: 0; background: none; overflow: visible; top: 0;
-  display: flex; flex-direction: row; }
-.pop.fan .fab + .fab { margin-left: calc(-1 * var(--line)); }
+.pop[data-pop="objects"] { max-height: min(50vh, calc(100% - 140px - var(--safe-t) - var(--safe-b))); }
+.bar-title { display: flex; align-items: center; padding: 0 12px; font-size: 13px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; }
+.pop[data-pop="draw"] .fan-row { margin: 10px 0 8px; }
+.pop[data-pop="draw"] .fan-row .fab { flex: 1; width: auto; min-height: 64px; }
+.draw-into { font-size: 12px; color: var(--muted); }
 .pop h4 { margin: 12px -10px 8px; padding: 4px 10px; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   background: var(--ink); color: var(--paper); }
 .pop h4:first-child { margin-top: 0; }
@@ -200,9 +205,8 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
   font-weight: 700; font-size: 11px; text-shadow: none; }
 
 /* --- panel (details, forms): opens where the menus do, left of the tiles --- */
-#sheet { position: absolute; z-index: 1100; top: calc(8px + var(--safe-t)); right: calc(8px + 60px + 6px + var(--safe-r));
-  width: min(320px, calc(100vw - 88px)); overflow: auto;
-  background: var(--paper); color: var(--ink); border: var(--line) solid var(--rule); padding: 0 10px 10px; }
+#sheet { overflow: auto; padding: 0 10px 10px; }
+.pop > .sheet-bar { margin: 0; flex: none; }
 .sheet-bar { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: stretch;
   margin: 0 -10px; background: var(--paper); border-bottom: var(--line) solid var(--rule); }
 .sheet-x, .sheet-back { min-height: 48px; border: 0; background: var(--paper); color: var(--ink); cursor: pointer;

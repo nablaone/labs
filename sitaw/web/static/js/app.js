@@ -238,8 +238,8 @@ function startApp(session) {
   };
   // Re-render an open popover when the data behind it changes.
   const refreshPop = () => {
-    if (openPop === 'objects') renderObjects($('[data-pop="objects"]'));
-    if (openPop === 'view') renderView($('[data-pop="view"]'));
+    if (openPop === 'objects') renderObjects($('[data-pop="objects"] .pop-body'));
+    if (openPop === 'view') renderView($('[data-pop="view"] .pop-body'));
   };
   sync.addEventListener('status', updateServer);
   sync.addEventListener('reset', (e) => {
@@ -352,13 +352,11 @@ function startApp(session) {
     openPop = null;
     markTiles();
   }
-  // A tile is lit while its menu, or a panel opened from it, is showing.
+  // The button column is hidden while a menu or panel occupies its place.
+  // DRAW is lit (as CANCEL) while drawing.
   function markTiles() {
-    const panel = !$('#sheet').hidden && panelFrom;
-    for (const b of document.querySelectorAll('[data-fab]')) {
-      const f = b.dataset.fab;
-      b.classList.toggle('active', (f === 'draw' && draw.active) || f === openPop || f === panel);
-    }
+    $('#fab').hidden = !!openPop || !$('#sheet').hidden;
+    $('[data-fab="draw"]').classList.toggle('active', draw.active);
   }
   function togglePop(name) {
     const was = openPop;
@@ -367,19 +365,25 @@ function startApp(session) {
     if (was === name) return;
     if (name === 'draw' && draw.active) { draw.cancel(); return; } // tap Draw again to abort
     const pop = $(`[data-pop="${name}"]`);
+    const body = $('.pop-body', pop);
     openPop = name;
-    if (name === 'view') renderView(pop);
-    if (name === 'goto') renderGoto(pop);
-    if (name === 'objects') renderObjects(pop);
+    if (name === 'view') renderView(body);
+    if (name === 'goto') renderGoto(body);
+    if (name === 'objects') renderObjects(body);
+    if (name === 'draw') $('.draw-into', pop).textContent = `New objects go to ${folderName(drawTarget())}`;
     pop.hidden = false;
+    body.scrollTop = 0;
     markTiles();
   }
   $('#fab').addEventListener('click', (e) => {
     const fab = e.target.closest('[data-fab]')?.dataset.fab;
     if (fab) togglePop(fab);
   });
-  L.DomEvent.disableClickPropagation($('#fab'));
-  L.DomEvent.disableScrollPropagation($('#fab'));
+  for (const el of [$('#fab'), ...document.querySelectorAll('.pop')]) {
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+  }
+  document.addEventListener('click', (e) => { if (e.target.closest('[data-pop-close]')) closePops(); });
   map.on('click', () => {
     if (draw.active) return;
     closePops();
@@ -733,8 +737,8 @@ function startApp(session) {
   }
 
   // ----- panel (details, forms) -----
-  // Opens in the same place as the menus, next to the tile column, to keep the
-  // map free. A panel opened from a menu shows "‹ <menu>" to go back to it.
+  // Opens in the same place as the menus (where the button column was), to keep
+  // the map free. A panel opened from a menu shows "‹ <menu>" to go back to it.
   const FAB_LABEL = { view: 'View', goto: 'Go to', objects: 'Obj' };
   let panelFrom = null; // menu the current panel was opened from, or null (map tap, link)
   function openFrom(menu, fn) {
@@ -748,10 +752,6 @@ function startApp(session) {
       ? `<button class="sheet-back" data-sheet-back>${icon('chevronLeft')}${esc(FAB_LABEL[panelFrom])}</button>` : '<span></span>';
     $('.sheet-body', s).innerHTML = `<div class="sheet-bar">${back}
       <button class="sheet-x" data-sheet-close aria-label="Close">${icon('x')}</button></div>${html}`;
-    // Line up with the tile it belongs to (or the top of the column).
-    const top = (panelFrom ? $(`[data-fab="${panelFrom}"]`) : $('#fab')).getBoundingClientRect().top;
-    s.style.top = `${top}px`;
-    s.style.maxHeight = `calc(100% - ${top}px - 110px - var(--safe-b))`;
     s.hidden = false;
     s.scrollTop = 0;
     markTiles();
