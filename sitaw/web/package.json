@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Marks web/ as ES modules so `node --test web/test` can import the client code. No dependencies, no build."
+}

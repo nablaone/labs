@@ -1,0 +1,12 @@
+{
+  "name": "sitaw",
+  "short_name": "sitaw",
+  "description": "Lightweight team situational awareness",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1f2a1f",
+  "theme_color": "#1f2a1f",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

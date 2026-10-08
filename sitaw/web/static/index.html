@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#1f2a1f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>sitaw</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <!-- Join / auth screen -->
+  <section id="join" class="screen" hidden>
+    <form id="join-form" class="card">
+      <h1>sitaw</h1>
+      <p id="join-msg">You were invited to join the team.</p>
+      <label for="callsign">Callsign</label>
+      <input id="callsign" name="callsign" maxlength="24" autocomplete="off" autocapitalize="characters" required>
+      <button type="submit" class="btn primary">Join</button>
+      <p id="join-err" class="err" hidden></p>
+    </form>
+  </section>
+
+  <section id="noinvite" class="screen" hidden>
+    <div class="card">
+      <h1>sitaw</h1>
+      <p>You need an invitation link to use this app. Ask your team lead for one.</p>
+    </div>
+  </section>
+
+  <!-- Main map app: everything floats over the map, no bars -->
+  <main id="app" hidden>
+    <div id="map"></div>
+    <div id="crosshair" aria-hidden="true"></div>
+
+    <!-- Right-side action buttons (top-right); each opens a popover to its left -->
+    <div id="fab">
+      <div class="fab-slot">
+        <div class="pop" data-pop="view" hidden></div>
+        <button class="fab" data-fab="view" aria-label="View" title="View"><span data-icon="layers"></span></button>
+      </div>
+      <div class="fab-slot">
+        <div class="pop" data-pop="goto" hidden></div>
+        <button class="fab" data-fab="goto" aria-label="Go to" title="Go to"><span data-icon="navigate"></span></button>
+      </div>
+      <div class="fab-slot">
+        <div class="pop" data-pop="objects" hidden></div>
+        <button class="fab" data-fab="objects" aria-label="Objects" title="Objects"><span data-icon="folder"></span></button>
+      </div>
+      <div class="fab-slot">
+        <div class="pop fan" data-pop="draw" hidden>
+          <button class="fab sm" data-draw-kind="area" aria-label="Area" title="Area"><span data-icon="area"></span></button>
+          <button class="fab sm" data-draw-kind="line" aria-label="Line" title="Line"><span data-icon="line"></span></button>
+          <button class="fab sm" data-draw-kind="waypoint" aria-label="Waypoint" title="Waypoint"><span data-icon="point"></span></button>
+        </div>
+        <button class="fab" data-fab="draw" aria-label="Draw" title="Draw"><span data-icon="pencil"></span></button>
+      </div>
+    </div>
+
+    <!-- Drawing controls (only while placing) -->
+    <div id="drawctl" hidden>
+      <div id="draw-hint" class="hint"></div>
+      <div class="fan-row">
+        <button class="fab sm" data-draw="cancel" aria-label="Cancel" title="Cancel"><span data-icon="x"></span></button>
+        <button class="fab sm" data-draw="undo" aria-label="Undo" title="Undo"><span data-icon="undo"></span></button>
+        <button class="fab" data-draw="center" aria-label="Add point at crosshair" title="Add at crosshair"><span data-icon="plus"></span></button>
+        <button class="fab sm ok" data-draw="done" aria-label="Done" title="Done"><span data-icon="check"></span></button>
+      </div>
+    </div>
+
+    <!-- Bottom-left status (mounted as a Leaflet control so the scale stacks above it) -->
+    <div id="status">
+      <div id="me-line" class="me-line"></div>
+      <div id="center-coord" class="coord">—</div>
+      <div class="st-row">
+        <span id="gps-st" class="st warn"><span data-icon="gps"></span><span class="t">GPS…</span></span>
+        <span id="srv-st" class="st bad"><span data-icon="cloudOff"></span><span class="t">offline</span></span>
+      </div>
+    </div>
+
+    <!-- Bottom sheet (item details, forms), content filled by JS -->
+    <div id="sheet" hidden>
+      <div class="sheet-body"></div>
+    </div>
+    <div id="toast" hidden></div>
+  </main>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
