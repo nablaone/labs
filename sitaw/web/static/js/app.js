@@ -390,6 +390,8 @@ function startApp(session) {
     L.DomEvent.disableScrollPropagation(el);
   }
   document.addEventListener('click', (e) => { if (e.target.closest('[data-pop-close]')) closePops(); });
+  // "+ Folder" lives in the Objects title bar (outside the re-rendered body).
+  $('[data-pop="objects"] [data-act="new-folder"]').addEventListener('click', () => openFrom('objects', newFolder));
   map.on('click', () => {
     if (draw.active) return;
     closePops();
@@ -553,9 +555,6 @@ function startApp(session) {
     const folders = allFolders();
     const scroll = pop.scrollTop; // keep the place while browsing when data changes
     pop.innerHTML = `
-      <div class="pop-actions">
-        <button class="chip" data-act="new-folder">${icon('folderPlus')}New folder</button>
-      </div>
       ${folders.map((f) => {
         const objs = objectsIn(f.id).sort((a, b) => b.updatedAt - a.updatedAt);
         const open = f.id === target;
@@ -586,7 +585,6 @@ function startApp(session) {
         setCurrentFolder(tog);
         renderObjects(pop);
       } else if (menu) openFrom('objects', () => openItem(menu, false));
-      else if (t.closest('[data-act="new-folder"]')) openFrom('objects', newFolder);
       else if (details) openFrom('objects', () => openItem(details, false));
       else if (i) {
         // Fly to it and keep the menu open, so you can step through objects.

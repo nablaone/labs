@@ -219,6 +219,13 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 .sheet-x, .sheet-back { min-height: 48px; border: 0; background: var(--paper); color: var(--ink); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; }
 .sheet-x { width: 52px; border-left: var(--line) solid var(--rule); }
+/* an action in a menu's title bar, e.g. Objects "+ Folder" */
+.bar-btn { margin-left: auto; min-height: 48px; padding: 0 12px; border: 0; border-left: var(--line) solid var(--rule);
+  background: var(--paper); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.bar-btn .i { width: 20px; height: 20px; }
+.bar-btn:active { background: var(--ink); color: var(--paper); }
+.pop[data-pop="objects"] .pop-body { padding-top: 4px; }
 .sheet-back { gap: 2px; padding: 0 12px 0 6px; border-right: var(--line) solid var(--rule);
   font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .sheet-x:active, .sheet-back:active { background: var(--ink); color: var(--paper); }
