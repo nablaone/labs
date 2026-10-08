@@ -2,3 +2,4 @@ data/
 /sitaw
 # The repo root ignores *.mod* (kernel build output); go.mod must be tracked.
 !go.mod
+.env

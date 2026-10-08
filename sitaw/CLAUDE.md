@@ -225,6 +225,15 @@ Settings are flags that default to env vars (`SITAW_ADDR`, `SITAW_DB`, `SITAW_BA
 the address is derived from each request (X-Forwarded-Proto/Host, else Host).
 That isn't enough behind `tailscale serve`, which doesn't forward the scheme.
 
+## Deployment
+
+`Dockerfile` (cross-compiling multi-stage build → `scratch`, uid 65532,
+`/data`, HEALTHCHECK via `sitaw -healthcheck` → `GET /healthz`) and
+`compose.yaml` + `.env.example`. Compose bind-mounts a host directory
+(`SITAW_DATA_DIR`, default `./data`) and runs as `SITAW_UID:SITAW_GID`, so the
+files belong to the host user. `checkDataDir` explains an unwritable directory. Keep the binary static (`CGO_ENABLED=0`).
+Don't add dependencies that need cgo or files outside the binary.
+
 ## Commands
 
 ```sh

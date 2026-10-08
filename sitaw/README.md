@@ -36,6 +36,30 @@ that fetches its instructions (`GET /agent`). Paste it into Claude Code (or a
 similar agent). The agent can read the whole team's map and add objects, only
 in its own folder. API: `/api/v1` (documented in those instructions).
 
+## Deploy with Docker
+
+sitaw is a single static binary (web app embedded, pure-Go SQLite), so the
+image is just that binary on `scratch`, about 12 MB.
+
+```sh
+cp .env.example .env          # set SITAW_BASE_URL, SITAW_ADMIN_TOKEN (openssl rand -hex 24),
+                              # and SITAW_UID/SITAW_GID to your user: id -u, id -g
+mkdir -p data                 # create it yourself: Docker would create it as root
+docker compose up -d --build
+docker compose logs sitaw | grep invite    # the first team's invite link
+```
+
+- Data lives in a host directory, `./data` by default (`SITAW_DATA_DIR`):
+  `sitaw.db` plus SQLite's `-wal`/`-shm` files. Back up the directory.
+  For a consistent copy while running: `sqlite3 data/sitaw.db ".backup sitaw-backup.db"`.
+- The container runs as `SITAW_UID:SITAW_GID`, so the files stay yours. If
+  the directory isn't writable, the server exits with an error saying so.
+- Health: `GET /healthz`; the image's HEALTHCHECK uses `sitaw -healthcheck`.
+- Another CPU (e.g. building on a Mac for an amd64 server):
+  `docker buildx build --platform linux/amd64 -t sitaw .`, or build on the server itself.
+- Without Docker: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sitaw ./cmd/sitaw`,
+  copy the binary, and run it with the same env variables.
+
 **Phones need HTTPS.** Browsers only share GPS location with `https://` pages
 (or `localhost`). Over plain `http://192.168.x.x:8080` the GPS status shows
 **GPS needs HTTPS**. Tap it for details. The easiest options:

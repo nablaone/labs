@@ -40,7 +40,11 @@ func main() {
 		"pre-SQLite state file, imported once as team \"default\" if the database has no teams [SITAW_IMPORT_JSON]")
 	baseURL := flag.String("base-url", env("SITAW_BASE_URL", ""),
 		"external address clients use, e.g. https://host.tailnet.ts.net; empty = derive from each request [SITAW_BASE_URL]")
+	healthcheck := flag.Bool("healthcheck", false, "check that a server on -addr is healthy (exit 0/1) and quit; for container healthchecks")
 	flag.Parse()
+	if *healthcheck {
+		os.Exit(checkHealth(*addr))
+	}
 	*baseURL = strings.TrimRight(*baseURL, "/")
 	if *baseURL != "" && !strings.HasPrefix(*baseURL, "http://") && !strings.HasPrefix(*baseURL, "https://") {
 		fmt.Fprintf(os.Stderr, "base URL must start with http:// or https://, got %q\n", *baseURL)
@@ -62,7 +66,7 @@ func env(key, def string) string {
 }
 
 func run(log *slog.Logger, addr, dbPath, legacy, baseURL string) error {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	if err := checkDataDir(filepath.Dir(dbPath)); err != nil {
 		return err
 	}
 	st, err := store.Open(dbPath)
@@ -150,4 +154,40 @@ func bootstrap(log *slog.Logger, st *store.Store, legacy string) error {
 		log.Info("created team", "team", t.Name)
 	}
 	return err
+}
+
+// checkHealth calls /healthz on the local server (the image has no curl).
+func checkHealth(addr string) int {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bad addr:", err)
+		return 1
+	}
+	c := http.Client{Timeout: 2 * time.Second}
+	res, err := c.Get("http://127.0.0.1:" + port + "/healthz")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "status", res.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+// checkDataDir makes sure the database directory exists and is writable, with
+// an error that says what to do (a bind mount created by Docker is root's).
+func checkDataDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("data directory %s: %w", dir, err)
+	}
+	f, err := os.CreateTemp(dir, ".write-test-*")
+	if err != nil {
+		return fmt.Errorf("data directory %s is not writable by uid %d (%w); "+
+			"chown it to that user, or run sitaw as its owner (compose: SITAW_UID/SITAW_GID)", dir, os.Getuid(), err)
+	}
+	f.Close()
+	return os.Remove(f.Name())
 }

@@ -1,0 +1,22 @@
+# sitaw on a homelab:
+#   cp .env.example .env   # set SITAW_BASE_URL, SITAW_ADMIN_TOKEN, SITAW_UID/GID
+#   mkdir -p data          # create it yourself, so it belongs to you (not root)
+#   docker compose up -d --build
+#   docker compose logs sitaw | grep invite   # the first team's invite link
+#
+# Data (sitaw.db) is kept in a host directory, ./data by default: back it up.
+# Put HTTPS in front (phones only share GPS with https:// pages). Your proxy
+# must pass WebSockets on /ws. sitaw listens on 8080 inside the container.
+services:
+  sitaw:
+    build: .
+    image: sitaw:latest
+    restart: unless-stopped
+    env_file: .env
+    # Run as the owner of the data directory, so its files stay yours.
+    user: "${SITAW_UID:-1000}:${SITAW_GID:-1000}"
+    ports:
+      - "${SITAW_PORT:-8080}:8080"
+    volumes:
+      - ${SITAW_DATA_DIR:-./data}:/data
+    stop_grace_period: 10s

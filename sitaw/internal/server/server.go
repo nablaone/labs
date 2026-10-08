@@ -45,6 +45,14 @@ func (s *Server) InviteURL(r *http.Request, token string) string {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	// Liveness for container healthchecks: the process serves and the DB answers.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := s.store.Teams(); err != nil {
+			httpError(w, http.StatusServiceUnavailable, "database unavailable")
+			return
+		}
+		w.Write([]byte("ok\n"))
+	})
 	mux.HandleFunc("GET /api/invites/{token}", s.handleInviteInfo)
 	mux.HandleFunc("POST /api/join", s.handleJoin)
 	mux.HandleFunc("GET /api/me", s.withUser(s.handleMe))

@@ -1,0 +1,10 @@
+data/
+sitaw
+.env
+*.db
+*.db-*
+docs/
+web/test/
+web/tools/
+**/*_test.go
+internal/geo/testdata/
