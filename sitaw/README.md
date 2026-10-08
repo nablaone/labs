@@ -60,6 +60,22 @@ docker compose logs sitaw | grep invite    # the first team's invite link
 - Without Docker: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sitaw ./cmd/sitaw`,
   copy the binary, and run it with the same env variables.
 
+### Behind a Cloudflare Tunnel
+
+1. In Cloudflare Zero Trust → Networks → Tunnels → your tunnel → **Public Hostname**,
+   add `sitaw.<your domain>` → service `http://<host>:8080`, where `<host>` is
+   whatever cloudflared can reach (`localhost` if it runs on the host itself,
+   the container name if it shares a Docker network with sitaw). WebSockets
+   work through tunnels without extra settings.
+2. In `.env`: `SITAW_BASE_URL=https://sitaw.<your domain>`, then `docker compose up -d`.
+3. Optional: `SITAW_PORT=127.0.0.1:8080` publishes the port on localhost only,
+   so the app is reachable only through the tunnel (when cloudflared runs on the host).
+
+No cache rules are needed: sitaw sends `Cache-Control: no-cache` with ETags, so
+Cloudflare never serves an old app version. If you put **Cloudflare Access** in
+front, add a bypass for `/api/v1/*` and `/agent`, or AI agents (which use bearer
+tokens) can't get through. The app has its own invite-based login.
+
 **Phones need HTTPS.** Browsers only share GPS location with `https://` pages
 (or `localhost`). Over plain `http://192.168.x.x:8080` the GPS status shows
 **GPS needs HTTPS**. Tap it for details. The easiest options:

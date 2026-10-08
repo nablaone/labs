@@ -3,7 +3,9 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -23,6 +25,7 @@ type Server struct {
 	baseURL    string // external address; "" = derive from each request
 	log        *slog.Logger
 	limiter    *rateLimiter
+	etags      map[string]string // static file path -> quoted content hash
 }
 
 func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Logger) *Server {
@@ -34,7 +37,27 @@ func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Lo
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		log:        log,
 		limiter:    &rateLimiter{wins: map[string]*window{}},
+		etags:      hashFiles(static),
 	}
+}
+
+// hashFiles computes an ETag for every static file (embedded files have no
+// modification time, so http.FileServer can't produce validators itself).
+func hashFiles(fsys fs.FS) map[string]string {
+	tags := map[string]string{}
+	_ = fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		tags[path] = `"` + hex.EncodeToString(sum[:8]) + `"`
+		return nil
+	})
+	return tags
 }
 
 // InviteURL is the join link for token, at the address the caller sees.
@@ -99,8 +122,16 @@ func (s *Server) Handler() http.Handler {
 		if p == "/join" || p == "/login" || strings.HasPrefix(p, "/i/") || strings.HasPrefix(p, "/u/") {
 			r.URL.Path = "/"
 		}
-		if p == "/sw.js" {
-			w.Header().Set("Cache-Control", "no-cache")
+		// Static files: always revalidate (browsers, the service worker and any
+		// CDN such as Cloudflare), answered cheaply with 304 via a content ETag.
+		// Without this, a CDN may serve old JS against a new server for hours.
+		w.Header().Set("Cache-Control", "no-cache")
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name == "" {
+			name = "index.html"
+		}
+		if tag, ok := s.etags[name]; ok {
+			w.Header().Set("ETag", tag)
 		}
 		files.ServeHTTP(w, r)
 	})

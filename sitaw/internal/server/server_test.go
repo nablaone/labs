@@ -391,3 +391,21 @@ func TestFoldersOverWS(t *testing.T) {
 		t.Fatalf("personal folder delete: %+v", ack)
 	}
 }
+
+// Static files must always revalidate (a CDN like Cloudflare would otherwise
+// cache old JS for hours) and answer If-None-Match with 304.
+func TestStaticCaching(t *testing.T) {
+	ts, _, _ := setup(t)
+	for _, p := range []string{"/", "/join?t=x", "/i/6f1c2c1e-0000-4000-8000-000000000001"} {
+		r, _ := http.Get(ts.URL + p)
+		if r.Header.Get("Cache-Control") != "no-cache" || r.Header.Get("ETag") == "" {
+			t.Fatalf("%s: cache-control=%q etag=%q", p, r.Header.Get("Cache-Control"), r.Header.Get("ETag"))
+		}
+		req, _ := http.NewRequest("GET", ts.URL+p, nil)
+		req.Header.Set("If-None-Match", r.Header.Get("ETag"))
+		r2, _ := http.DefaultClient.Do(req)
+		if r2.StatusCode != http.StatusNotModified {
+			t.Fatalf("%s revalidation: %d", p, r2.StatusCode)
+		}
+	}
+}
