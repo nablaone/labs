@@ -21,9 +21,9 @@ const POS_HEARTBEAT = 30000;     // resend even when stationary
 const POS_MIN_MOVE = 5;          // meters
 const GPS_STALE = 30000;         // a fix older than this is shown as stale
 const COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5', '#8e24aa', '#000000', '#ffffff'];
-const KIND_LABEL = { waypoint: 'Waypoint', line: 'Line', area: 'Area' };
+const KIND_LABEL = { waypoint: 'Waypoint', line: 'Line', area: 'Area', position: 'Position' };
 const KIND_PREFIX = { waypoint: 'WP', line: 'LN', area: 'AR' };
-const KIND_ICON = { waypoint: 'point', line: 'line', area: 'area' };
+const KIND_ICON = { waypoint: 'point', line: 'line', area: 'area', position: 'gps' };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -85,7 +85,9 @@ async function showJoin(invite, session) {
 // are shown, and where new objects go. Folder visibility is stored only once
 // the user toggles it; until then folderVisible() picks the default.
 function loadPrefs() {
-  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, night: false };
+  // posMode: how this device maintains your position: 'gps' (fixes update it),
+  // 'manual' (placed by hand, GPS ignored) or 'off' (location unknown).
+  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, night: false, posMode: 'gps' };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY));
     if (!p) return def;
@@ -95,6 +97,7 @@ function loadPrefs() {
       folders: p.folders ?? {},
       drawFolder: p.drawFolder ?? null,
       night: !!p.night,
+      posMode: ['gps', 'manual', 'off'].includes(p.posMode) ? p.posMode : 'gps',
     };
   } catch {
     return def;
@@ -189,12 +192,12 @@ function startApp(session) {
     selectedId = it && !isFolder(it) ? it.id : null;
     if (!selectedId) return;
     const style = { pane: 'selection', color: '#ffeb3b', opacity: 0.9, interactive: false };
-    if (it.kind === 'waypoint') L.circleMarker(it.coords[0], { ...style, radius: 24, weight: 5, fill: false }).addTo(selection);
+    if (it.coords.length === 1) L.circleMarker(it.coords[0], { ...style, radius: 24, weight: 5, fill: false }).addTo(selection);
     else if (it.kind === 'line') L.polyline(it.coords, { ...style, weight: 14 }).addTo(selection);
     else L.polygon(it.coords, { ...style, weight: 12, fill: false }).addTo(selection);
   }
   const team = new TeamLayer(map, me.id, (uid) => openFrom(null, () => openUser(uid, false)));
-  const self = new SelfMarker(map);
+  const self = new SelfMarker(map, me.callsign);
   const grid = new MgrsGrid();
 
   const overlays = { grid, team: team.group };
@@ -248,6 +251,7 @@ function startApp(session) {
   sync.addEventListener('status', updateServer);
   sync.addEventListener('reset', (e) => {
     items.reset(e.detail.items);
+    renderPositions();
     updateServer();
     refreshPop();
     const final = e.detail.source === 'server';
@@ -270,6 +274,10 @@ function startApp(session) {
       me.folderId = e.detail.user.folderId; // sessions from before folders existed
       changed = true;
     }
+    if (e.detail.user?.positionId && me.positionId !== e.detail.user.positionId) {
+      me.positionId = e.detail.user.positionId; // sessions from before positions were objects
+      changed = true;
+    }
     if (changed) {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       renderMe();
@@ -280,12 +288,36 @@ function startApp(session) {
     if (it.id === selectedId) select(live(it) ? it : null);
     // A folder change can move many objects in or out of view.
     if (isFolder(it)) items.reset(sync.liveItems()); else items.upsert(it);
+    if (it.kind === 'position') {
+      if (it.createdBy === me.id || it.id === myPositionId()) renderSelf();
+      else if (it.deleted) team.remove(it.createdBy);
+      else if (sync.positions.get(it.createdBy)) team.set(sync.positions.get(it.createdBy));
+      updateGps();
+    }
     updateServer();
     refreshPop();
   });
   sync.addEventListener('user', refreshPop);
-  sync.addEventListener('positions', (e) => team.reset(e.detail.positions));
-  sync.addEventListener('pos', (e) => team.set(e.detail.pos));
+  // Positions are objects (kind "position", one per user in their folder).
+  // Yours drives the self marker, whoever's device wrote it (this one or your
+  // other device); everyone else's drive the team layer, which follows the
+  // View → TEAM toggle rather than folder visibility.
+  function myPositionId() {
+    return me.positionId ?? sync.users.get(me.id)?.positionId;
+  }
+  function myPosition() {
+    const it = sync.items.get(myPositionId());
+    return live(it) && it.kind === 'position' && it.coords?.length ? it : null;
+  }
+  function renderSelf() {
+    const it = myPosition();
+    if (it) self.update(it.coords[0][0], it.coords[0][1], it.pos?.acc, it.pos?.source === 'manual');
+    else self.hide();
+  }
+  function renderPositions() {
+    team.reset([...sync.positions.values()]);
+    renderSelf();
+  }
   sync.addEventListener('leave', (e) => team.remove(e.detail.userId));
   sync.addEventListener('rejected', (e) => toast(`Not saved: ${e.detail.error}`));
   sync.addEventListener('unauthorized', () => {
@@ -296,10 +328,12 @@ function startApp(session) {
   setInterval(updateServer, 2000);
 
   // ----- own position + status: GPS -----
-  let follow = false, lastFix = null, lastSent = null, gpsError = null;
+  let follow = false, lastFix = null, lastSent = null, gpsError = null, gpsDetail = '', gpsWatch = null;
   const updateGps = () => {
     const el = $('#gps-st');
-    if (gpsError) setStatus(el, 'bad', 'gps', gpsError);
+    if (prefs.posMode === 'manual') setStatus(el, myPosition() ? 'warn' : 'bad', 'gps', myPosition() ? 'manual position' : 'position unknown');
+    else if (prefs.posMode === 'off') setStatus(el, 'bad', 'gps', 'position unknown');
+    else if (gpsError) setStatus(el, 'bad', 'gps', gpsError);
     else if (!lastFix) setStatus(el, 'warn', 'gps', 'GPS…');
     else if (Date.now() - lastFix.ts > GPS_STALE) setStatus(el, 'warn', 'gps', `GPS ${ago(lastFix.ts)}`);
     else setStatus(el, 'ok', 'gps', `±${Math.round(lastFix.acc)} m${follow ? ' · follow' : ''}`);
@@ -309,45 +343,149 @@ function startApp(session) {
     $('[data-fab="goto"]').classList.toggle('following', on);
     updateGps();
   };
+  // Writes your position object. GPS fixes go through sendFix (throttled);
+  // manual placement and "unknown" through the position actions.
+  function writePosition(source, at) {
+    const pos = source === 'gps'
+      ? { source, acc: at.acc, ...(at.hdg != null ? { hdg: at.hdg } : {}), ...(at.spd != null ? { spd: at.spd } : {}), fix: at.ts }
+      : { source, fix: Math.round(sync.now()) };
+    return sync.putItem({ id: myPositionId(), kind: 'position', name: me.callsign, folder: myFolder(), coords: [[at.lat, at.lon]], pos });
+  }
   const sendFix = (force) => {
-    if (!lastFix) return;
+    if (!lastFix || prefs.posMode !== 'gps' || !myPositionId()) return;
     const now = Date.now();
     const moved = lastSent ? L.latLng(lastSent.lat, lastSent.lon).distanceTo([lastFix.lat, lastFix.lon]) : Infinity;
     const since = lastSent ? now - lastSent.at : Infinity;
     if (force || since >= POS_HEARTBEAT || (moved >= POS_MIN_MOVE && since >= POS_MIN_INTERVAL)) {
-      sync.sendPos(lastFix);
+      writePosition('gps', lastFix);
       lastSent = { lat: lastFix.lat, lon: lastFix.lon, at: now };
     }
   };
-  if ('geolocation' in navigator) {
-    navigator.geolocation.watchPosition((p) => {
+  // Why GPS fails, in words a user can act on. The status shows the short
+  // form; tapping it opens the explanation (gpsDetail) with a Retry button.
+  function gpsFailed(short, detail) {
+    gpsError = short;
+    gpsDetail = detail;
+    updateGps();
+  }
+  function startGps() {
+    if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
+    gpsWatch = null;
+    gpsError = null;
+    if (!('geolocation' in navigator)) {
+      gpsFailed('no GPS', 'This browser has no location support.');
+      return;
+    }
+    if (!window.isSecureContext) {
+      // Browsers only give location to https:// pages (and localhost); on plain
+      // http they refuse silently, without asking.
+      gpsFailed('GPS needs HTTPS', `This page is opened over plain HTTP (${location.origin}). Browsers only share ` +
+        'location with HTTPS pages. Open sitaw through an https:// address (see the README: a reverse proxy ' +
+        'such as Caddy, or a tunnel such as cloudflared or Tailscale).');
+      return;
+    }
+    gpsWatch = navigator.geolocation.watchPosition((p) => {
       const c = p.coords;
       gpsError = null;
+      gpsDetail = '';
       lastFix = {
         lat: c.latitude, lon: c.longitude, acc: c.accuracy, ts: p.timestamp,
         ...(c.heading != null && !Number.isNaN(c.heading) ? { hdg: c.heading } : {}),
         ...(c.speed != null ? { spd: c.speed } : {}),
       };
-      self.update(c.latitude, c.longitude, c.accuracy);
-      if (follow) map.panTo([c.latitude, c.longitude]);
+      if (follow && prefs.posMode === 'gps') map.panTo([c.latitude, c.longitude]);
       sendFix(false);
       updateGps();
     }, (err) => {
-      gpsError = err.code === err.PERMISSION_DENIED ? 'GPS denied' : 'no GPS';
-      updateGps();
-    }, { enableHighAccuracy: true, maximumAge: 5000 });
-    setInterval(() => { sendFix(false); updateGps(); }, 5000);
-  } else {
-    gpsError = 'no GPS';
+      const said = err.message ? ` (Browser: "${err.message}")` : '';
+      if (err.code === err.PERMISSION_DENIED) {
+        gpsFailed('GPS denied', 'Location permission is blocked for this site. Allow it in the browser: tap the ' +
+          'icon left of the address → Permissions/Site settings → Location → Allow. Also check that the ' +
+          'browser app itself may use location (phone Settings → Apps/Privacy → Location). Then tap Retry.' + said);
+      } else if (err.code === err.POSITION_UNAVAILABLE) {
+        gpsFailed('GPS off?', 'The phone could not get a position. Turn on Location in the phone settings ' +
+          '(quick settings panel), and try outdoors or near a window. Then tap Retry.' + said);
+      } else {
+        gpsFailed('GPS timeout', 'No position arrived in time. Try outdoors or near a window, then tap Retry.' + said);
+      }
+    }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 });
   }
+  startGps();
+  setInterval(() => { sendFix(false); updateGps(); }, 5000);
   updateGps();
+  $('#gps-st').addEventListener('click', () => openFrom(null, showGpsHelp));
+
+  function showGpsHelp() {
+    const mine = myPosition();
+    const mode = { gps: 'GPS updates your position', manual: 'Set by hand (GPS ignored)', off: 'Location unknown' }[prefs.posMode];
+    const s = openSheet(`
+      <h2>${icon('gps')} My position</h2>
+      <div class="sub">${mine ? `${esc(formatCoord(mine.coords[0][0], mine.coords[0][1]))} · ${esc(posSummary(mine))}` : 'No position: the team does not see you'}</div>
+      <div class="sub">Mode: <b>${esc(mode)}</b></div>
+      <h4 class="sheet-h4">GPS on this device</h4>
+      <div class="sub">${lastFix && !gpsError ? `${esc(formatCoord(lastFix.lat, lastFix.lon))} · ±${Math.round(lastFix.acc)} m · ${ago(lastFix.ts)}`
+        : esc(gpsError ?? 'Waiting for the first fix…')}</div>
+      <p>${esc(gpsDetail || (gpsError ? '' : lastFix ? 'GPS is working.' : 'Waiting for the phone to report a position. Outdoors this usually takes a few seconds.'))}</p>
+      ${positionActions()}`);
+    s.onclick = (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'retry') { startGps(); toast('Asking for location…'); }
+      else if (!positionAction(a)) return;
+      showGpsHelp();
+    };
+  }
+
+  // What you can do with your own position, used by the GPS panel and by your
+  // position's details. Placing it by hand sticks until USE GPS.
+  function positionActions() {
+    const mine = myPosition();
+    return `<div class="row actions">
+      <button class="btn" data-a="manual">${icon('me')} Set at crosshair</button>
+      ${prefs.posMode !== 'gps' ? '<button class="btn primary" data-a="use-gps">Use GPS</button>' : '<button class="btn" data-a="retry">Retry GPS</button>'}
+      ${mine ? '<button class="btn danger" data-a="unknown">Unknown</button>' : ''}
+    </div>`;
+  }
+  function positionAction(a) {
+    if (a === 'manual') {
+      if (!myPositionId()) { toast('Not connected yet'); return true; }
+      const c = map.getCenter();
+      prefs.posMode = 'manual';
+      savePrefs(prefs);
+      writePosition('manual', { lat: c.lat, lon: c.lng });
+      setFollow(false);
+      toast('Position set at the crosshair · GPS ignored until USE GPS');
+    } else if (a === 'use-gps') {
+      prefs.posMode = 'gps';
+      savePrefs(prefs);
+      lastSent = null;
+      const fresh = lastFix && Date.now() - lastFix.ts < GPS_STALE;
+      startGps(); // re-ask: permission or settings may have changed meanwhile
+      if (fresh) sendFix(true); else toast('Waiting for GPS…');
+    } else if (a === 'unknown') {
+      prefs.posMode = 'off';
+      savePrefs(prefs);
+      if (myPosition()) sync.deleteItem(myPositionId());
+      toast('Position removed · the team sees you as unknown');
+    } else return false;
+    updateGps();
+    return true;
+  }
+
+  function posSummary(it) {
+    const p = it.pos ?? {};
+    const src = p.source === 'manual' ? 'manual' : `GPS${p.acc ? ` ±${Math.round(p.acc)} m` : ''}`;
+    return `${src} · ${ago(p.fix ?? it.updatedAt)}`;
+  }
   map.on('dragstart', () => { if (follow) setFollow(false); });
 
   function goToMe() {
-    if (!lastFix) { toast(gpsError ?? 'Waiting for GPS…'); return; }
-    setFollow(true);
-    map.setView([lastFix.lat, lastFix.lon], Math.max(map.getZoom(), 15));
+    const mine = myPosition();
+    if (!mine) { toast(prefs.posMode === 'gps' ? (gpsError ?? 'Waiting for GPS…') : 'Position unknown: set it in the GPS panel'); return; }
+    if (prefs.posMode === 'gps') setFollow(true);
+    map.setView(mine.coords[0], Math.max(map.getZoom(), 15));
   }
+  // Where "here" is for distances: your position, else the map centre.
+  const here = () => { const m = myPosition(); return m ? L.latLng(m.coords[0]) : map.getCenter(); };
 
   // ----- popovers (View / Go to / Objects / Draw) -----
   let openPop = null;
@@ -488,7 +626,7 @@ function startApp(session) {
     if (user) {
       const p = sync.positions.get(user);
       if (p) map.setView([p.lat, p.lon], Math.max(map.getZoom(), 14));
-      else toast('No position shared yet');
+      else toast(sync.users.get(user)?.ownerId ? 'Agents have no position on the map' : 'No position shared yet');
       return;
     }
     const it = sync.items.get(item);
@@ -500,13 +638,13 @@ function startApp(session) {
 
   function searchResults(raw) {
     const q = raw.trim().toLowerCase();
-    const here = lastFix ? L.latLng(lastFix.lat, lastFix.lon) : map.getCenter();
-    const dist = (ll) => formatDistance(here.distanceTo(ll));
-    const people = [...sync.positions.values()].filter((p) => p.userId !== me.id);
-    const meRow = `<button class="prow" data-go="me">${icon('me')}<span class="name">Me${follow ? ' (following)' : ''}</span>
-      <span class="meta">${lastFix ? `±${Math.round(lastFix.acc)} m` : esc(gpsError ?? 'no fix')}</span></button>`;
+    const from = here();
+    const dist = (ll) => formatDistance(from.distanceTo(ll));
+    const people = teamMembers();
+    const meRow = `<button class="prow" data-go="me">${icon('me')}<span class="name">Me · ${esc(me.callsign)}${follow ? ' (following)' : ''}</span>
+      <span class="meta">${myPosition() ? esc(posSummary(myPosition())) : 'unknown'}</span></button>`;
     if (!q) {
-      return `${meRow}<h4>Team · ${people.length}</h4>${people.sort((a, b) => b.ts - a.ts).map((p) => personRow(p, dist)).join('')
+      return `${meRow}<h4>Team · ${people.length}</h4>${people.map((m) => personRow(m, dist)).join('')
         || '<div class="empty">No one else yet</div>'}`;
     }
     const c = parseAnyCoord(raw);
@@ -514,22 +652,39 @@ function startApp(session) {
       ${icon('go')}<span class="name">${esc(formatCoord(c.lat, c.lon))}</span>
       <span class="meta">${esc(c.kind === 'mgrs' ? formatDegrees(c.lat, c.lon) : dist([c.lat, c.lon]))}</span></button>`;
     const match = (...s) => s.some((x) => x?.toLowerCase().includes(q));
-    const ppl = people.filter((p) => match(p.callsign));
+    const ppl = people.filter((m) => match(m.callsign, m.owner));
+    const meHit = match(me.callsign, 'me');
     const folders = allFolders().filter((f) => match(f.name));
-    const objs = sync.liveItems().filter((i) => !isFolder(i) && match(i.name, i.remarks, folderName(folderOf(i))))
+    const objs = sync.liveItems().filter((i) => !isFolder(i) && i.kind !== 'position' && match(i.name, i.remarks, folderName(folderOf(i))))
       .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 50);
     const out = [
       coordRow,
-      ppl.length && `<h4>Team</h4>${ppl.map((p) => personRow(p, dist)).join('')}`,
+      (ppl.length || meHit) && `<h4>Team</h4>${meHit ? meRow : ''}${ppl.map((m) => personRow(m, dist)).join('')}`,
       objs.length && `<h4>Objects</h4>${objs.map((i) => objectRow(i, dist(anchor(i)), true)).join('')}`,
       folders.length && `<h4>Folders</h4>${folders.map((f) => folderButton(f)).join('')}`,
     ].filter(Boolean).join('');
     return out || '<div class="empty">Nothing found. Try a name, MGRS (34UDC1234) or lat, lon (52.23, 21.01).</div>';
   }
 
-  const anchor = (it) => it.kind === 'waypoint' ? L.latLng(it.coords[0]) : L.latLngBounds(it.coords).getCenter();
-  const personRow = (p, dist) => `<button class="prow" data-user="${esc(p.userId)}">${icon('user')}<span class="name">${esc(p.callsign)}</span>
-    <span class="meta">${dist([p.lat, p.lon])} · ${ago(p.ts)}</span></button>`;
+  const anchor = (it) => it.coords.length === 1 ? L.latLng(it.coords[0]) : L.latLngBounds(it.coords).getCenter();
+  // Everyone in the team except you: the roster (people and active agents),
+  // plus anyone only known from a position. Freshest positions first, then
+  // members without one.
+  function teamMembers() {
+    const out = new Map();
+    for (const u of sync.users.values()) {
+      if (u.id === me.id || u.revoked) continue;
+      out.set(u.id, { id: u.id, callsign: u.callsign, agent: !!u.ownerId, owner: u.ownerId ? author(u.ownerId).replace(' 🤖', '') : '' });
+    }
+    for (const p of sync.positions.values()) {
+      if (p.userId === me.id) continue;
+      out.set(p.userId, { ...(out.get(p.userId) ?? { id: p.userId, callsign: p.callsign }), pos: p });
+    }
+    return [...out.values()].sort((a, b) => (b.pos?.ts ?? -1) - (a.pos?.ts ?? -1) || a.callsign.localeCompare(b.callsign));
+  }
+  const personRow = (m, dist) => `<button class="prow${m.pos ? '' : ' dim'}" data-user="${esc(m.id)}">${icon(m.agent ? 'robot' : 'user')}
+    <span class="name">${esc(m.callsign)}</span>
+    <span class="meta">${m.pos ? `${dist([m.pos.lat, m.pos.lon])} · ${ago(m.pos.ts)}` : m.agent ? `agent of ${esc(m.owner)}` : 'no position'}</span></button>`;
   const folderButton = (f) => `<button class="prow" data-item="${esc(f.id)}">${icon('folder')}<span class="name">${esc(f.name)}</span>
     <span class="meta">${objectsIn(f.id).length}</span></button>`;
   // Only the icon carries the object's color; text stays ink for legibility.
@@ -610,10 +765,10 @@ function startApp(session) {
   function focusItem(it, pop) {
     const h = map.getSize().y;
     const top = Math.min(pop && !pop.hidden ? pop.getBoundingClientRect().bottom + 16 : 60, h * 0.75);
-    const pts = it.kind === 'waypoint' ? [it.coords[0], it.coords[0]] : it.coords;
+    const pts = it.coords.length === 1 ? [it.coords[0], it.coords[0]] : it.coords;
     map.fitBounds(L.latLngBounds(pts), {
       paddingTopLeft: [24, top], paddingBottomRight: [80, 90],
-      maxZoom: it.kind === 'waypoint' ? Math.max(map.getZoom(), 15) : 17,
+      maxZoom: it.coords.length === 1 ? Math.max(map.getZoom(), 15) : 17,
     });
   }
 
@@ -626,7 +781,8 @@ function startApp(session) {
   let inviteErr = null;   // why there is none; cleared when INFO is reopened
 
   async function renderInfo(body) {
-    const pos = lastFix ? formatCoord(lastFix.lat, lastFix.lon) : null;
+    const mine = myPosition();
+    const pos = mine ? formatCoord(mine.coords[0][0], mine.coords[0][1]) : null;
     const field = (label, value, copy, extra = '') => `
       <h4>${esc(label)}</h4>
       <div class="frow">
@@ -640,16 +796,16 @@ function startApp(session) {
       <p class="empty">This link signs in as <b>${esc(me.callsign)}</b>. Treat it like a password.</p>
       ${field('Invite to team', esc(teamInvite ? `${location.origin}/join?t=${teamInvite}`
         : inviteErr ?? (navigator.onLine ? 'Loading…' : 'Needs a connection.')), teamInvite ? 'invite' : '')}
-      ${field('My position', pos ? esc(pos) : esc(gpsError ?? 'Waiting for GPS…'), pos ? 'pos' : '',
-        lastFix ? `<span class="meta">±${Math.round(lastFix.acc)} m · ${ago(lastFix.ts)}</span>` : '')}
-      ${lastFix ? `<p class="empty">${esc(formatDegrees(lastFix.lat, lastFix.lon))}</p>` : ''}
+      ${field('My position', pos ? esc(pos) : 'unknown', pos ? 'pos' : '',
+        mine ? `<span class="meta">${esc(posSummary(mine))}</span>` : '')}
+      ${mine ? `<p class="empty">${esc(formatDegrees(mine.coords[0][0], mine.coords[0][1]))}</p>` : ''}
       <div class="pop-actions"><button class="chip" data-act="new-team">${icon('plus')}New team</button></div>`;
     body.onclick = async (e) => {
       const t = e.target;
       const what = t.closest('[data-copy]')?.dataset.copy;
       if (what === 'login') copyText(loginURL(), 'Sign-in link copied · keep it private');
       else if (what === 'invite') copyText(`${location.origin}/join?t=${teamInvite}`, 'Invite link copied');
-      else if (what === 'pos' && lastFix) copyText(formatCoord(lastFix.lat, lastFix.lon), 'Position copied');
+      else if (what === 'pos' && mine) copyText(formatCoord(mine.coords[0][0], mine.coords[0][1]), 'Position copied');
       else if (t.closest('[data-act="new-team"]')) openFrom('info', newTeamForm);
     };
     if (teamInvite || inviteErr || !navigator.onLine) return;
@@ -957,6 +1113,7 @@ function startApp(session) {
   }
 
   function describe(it) {
+    if (it.kind === 'position') return `${formatCoord(...it.coords[0])} · ${posSummary(it)}`;
     if (it.kind === 'waypoint') return formatCoord(...it.coords[0]);
     if (it.kind === 'line') return `${it.coords.length} pts · ${formatDistance(lineLength(it.coords))}`;
     const a = polygonArea(it.coords);
@@ -970,9 +1127,35 @@ function startApp(session) {
     return u?.ownerId ? `${name} 🤖` : name;
   }
 
+  // A position object: someone's location. Only its own user can change it,
+  // through the position actions (no edit form, no plain delete).
+  function showPosition(it) {
+    const mine = it.createdBy === me.id;
+    const s = openSheet(`
+      <h2>${icon('gps')} ${esc(author(it.createdBy))}</h2>
+      <div class="sub">Position · ${esc(formatCoord(it.coords[0][0], it.coords[0][1]))}</div>
+      <div class="sub">${esc(posSummary(it))}${!mine && myPosition() ? ` · ${esc(formatDistance(here().distanceTo(it.coords[0])))} away` : ''}</div>
+      <div class="row actions">
+        <button class="btn" data-a="zoom">Zoom</button>
+        <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
+      </div>
+      ${mine ? positionActions() : ''}`);
+    s.onclick = (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'zoom') { hideSheet(); zoomTo(it); }
+      else if (a === 'link') copyLink();
+      else if (a === 'retry') { startGps(); toast('Asking for location…'); }
+      else if (positionAction(a)) {
+        const now = myPosition();
+        if (now) showPosition(now); else closeSheet();
+      }
+    };
+  }
+
   function showItem(id) {
     const it = sync.items.get(id);
     if (!live(it)) return;
+    if (it.kind === 'position') { showPosition(it); return; }
     const fid = folderOf(it);
     const s = openSheet(`
       <h2>${esc(it.name || KIND_LABEL[it.kind])}</h2>
@@ -1057,7 +1240,7 @@ function startApp(session) {
   }
 
   function zoomTo(it) {
-    if (it.kind === 'waypoint') map.setView(it.coords[0], Math.max(map.getZoom(), 15));
+    if (it.coords.length === 1) map.setView(it.coords[0], Math.max(map.getZoom(), 15));
     else map.fitBounds(L.latLngBounds(it.coords), { padding: [40, 40] });
   }
 
@@ -1137,7 +1320,7 @@ function startApp(session) {
   function showUser(uid) {
     const p = sync.positions.get(uid);
     const callsign = p?.callsign ?? sync.users.get(uid)?.callsign ?? (uid === me.id ? me.callsign : '?');
-    const dist = p && lastFix ? ` · ${formatDistance(L.latLng(lastFix.lat, lastFix.lon).distanceTo([p.lat, p.lon]))} away` : '';
+    const dist = p && myPosition() && uid !== me.id ? ` · ${formatDistance(here().distanceTo([p.lat, p.lon]))} away` : '';
     const fid = sync.users.get(uid)?.folderId;
     const s = openSheet(`
       <h2>${esc(callsign)}</h2>

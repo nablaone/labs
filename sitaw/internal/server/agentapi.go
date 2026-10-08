@@ -74,15 +74,17 @@ func (s *Server) withAPIUser(h func(http.ResponseWriter, *http.Request, store.Us
 	})
 }
 
-// baseURL is the public URL as the caller sees it (works behind a proxy that
-// sets X-Forwarded-Proto/Host), falling back to the configured one.
+// publicURL is the address clients use to reach sitaw: the configured
+// external address (SITAW_BASE_URL) if set, otherwise derived from the request
+// (X-Forwarded-Proto/Host from a proxy, else Host). Set it when behind a proxy
+// or tunnel that doesn't forward those headers, e.g. tailscale serve.
 func (s *Server) publicURL(r *http.Request) string {
+	if s.baseURL != "" {
+		return s.baseURL
+	}
 	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
 		host = r.Host
-	}
-	if host == "" {
-		return s.baseURL
 	}
 	proto := r.Header.Get("X-Forwarded-Proto")
 	if proto == "" {
@@ -92,6 +94,12 @@ func (s *Server) publicURL(r *http.Request) string {
 		}
 	}
 	return proto + "://" + host
+}
+
+// isMapObject: drawn objects (waypoint, line, area). Folders and positions
+// have their own endpoints.
+func isMapObject(it store.Item) bool {
+	return it.Kind != store.KindFolder && it.Kind != store.KindPosition
 }
 
 // --- views ---
@@ -316,7 +324,7 @@ func (d *teamData) resolvePoint(s string) (float64, float64, error) {
 	if p, ok := geo.Parse(s); ok {
 		return p.Lat, p.Lon, nil
 	}
-	if it, ok := d.byID[s]; ok && it.Kind != store.KindFolder {
+	if it, ok := d.byID[s]; ok && isMapObject(it) {
 		lat, lon := center(it.Coords)
 		return lat, lon, nil
 	}
@@ -394,7 +402,7 @@ func (s *Server) handleAPIFolders(w http.ResponseWriter, r *http.Request, u stor
 	}
 	counts := map[string]int{}
 	for _, it := range d.items {
-		if it.Kind != store.KindFolder {
+		if isMapObject(it) {
 			counts[d.folderOf(it)]++
 		}
 	}
@@ -456,7 +464,7 @@ func (s *Server) handleAPIObjects(w http.ResponseWriter, r *http.Request, u stor
 
 	out := []objectView{}
 	for _, it := range d.items {
-		if it.Kind == store.KindFolder || (kind != "" && it.Kind != kind) {
+		if !isMapObject(it) || (kind != "" && it.Kind != kind) {
 			continue
 		}
 		fid := d.folderOf(it)
@@ -505,7 +513,7 @@ func (s *Server) handleAPIObject(w http.ResponseWriter, r *http.Request, u store
 		return
 	}
 	it, found := d.byID[r.PathValue("id")]
-	if !found || it.Kind == store.KindFolder {
+	if !found || !isMapObject(it) {
 		httpError(w, http.StatusNotFound, "no such object in your team")
 		return
 	}
@@ -586,7 +594,7 @@ func (s *Server) handleGeoNearby(w http.ResponseWriter, r *http.Request, u store
 	sort.Slice(people, func(i, j int) bool { return people[i].DistanceM < people[j].DistanceM })
 	objects := []objectView{}
 	for _, it := range d.items {
-		if it.Kind == store.KindFolder {
+		if !isMapObject(it) {
 			continue
 		}
 		if dist := math.Round(distanceTo(lat, lon, it)); dist <= radius {
@@ -629,6 +637,7 @@ type objectInput struct {
 	Remarks *string           `json:"remarks"`
 	Points  []json.RawMessage `json:"points"`
 	Folder  *string           `json:"folderId"`
+	Pos     *store.PosMeta    `json:"pos"` // positions: source, acc, hdg, spd, fix
 }
 
 func parsePoints(raw []json.RawMessage) ([][2]float64, error) {
@@ -670,6 +679,20 @@ func (s *Server) handleAPICreate(w http.ResponseWriter, r *http.Request, u store
 		return
 	}
 	it := store.Item{ID: store.NewUUID(), Kind: *in.Kind, Coords: coords, UpdatedAt: time.Now().UnixMilli()}
+	if it.Kind == store.KindPosition {
+		// Your position has a fixed id; "creating" it sets it (manual by default).
+		it.ID = u.PositionID
+		if cur, err := s.store.Item(u.TeamID, u.PositionID); err == nil {
+			it.UpdatedAt = max(it.UpdatedAt, cur.UpdatedAt+1)
+		}
+		it.Pos = in.Pos
+		if it.Pos == nil {
+			it.Pos = &store.PosMeta{Source: "manual"}
+		}
+		if it.Pos.Fix == 0 {
+			it.Pos.Fix = time.Now().UnixMilli()
+		}
+	}
 	if in.Name != nil {
 		it.Name = *in.Name
 	}
@@ -702,6 +725,9 @@ func (s *Server) handleAPIUpdate(w http.ResponseWriter, r *http.Request, u store
 		return
 	}
 	it := cur
+	if it.Kind == store.KindPosition && in.Points != nil && in.Pos == nil {
+		it.Pos = &store.PosMeta{Source: "manual", Fix: time.Now().UnixMilli()} // moved by hand
+	}
 	if in.Name != nil {
 		it.Name = *in.Name
 	}
@@ -713,6 +739,9 @@ func (s *Server) handleAPIUpdate(w http.ResponseWriter, r *http.Request, u store
 	}
 	if in.Folder != nil {
 		it.Folder = *in.Folder
+	}
+	if in.Pos != nil {
+		it.Pos = in.Pos
 	}
 	if in.Points != nil {
 		if it.Coords, err = parsePoints(in.Points); err != nil {

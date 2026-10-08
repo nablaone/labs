@@ -25,7 +25,20 @@ const (
 	// KindFolder groups other items (flat: folders don't nest). Every user has
 	// a personal folder; anyone in the team can create more.
 	KindFolder = "folder"
+	// KindPosition is a user's own location: one per user (fixed id
+	// users.position_id), in their personal folder, written only by them.
+	// Updated by GPS or placed by hand; deleted when the location is unknown.
+	KindPosition = "position"
 )
+
+// PosMeta is the extra data of a position object.
+type PosMeta struct {
+	Source string   `json:"source"`        // "gps" or "manual"
+	Acc    float64  `json:"acc,omitempty"` // accuracy, meters
+	Hdg    *float64 `json:"hdg,omitempty"` // heading, degrees true
+	Spd    *float64 `json:"spd,omitempty"` // speed, m/s
+	Fix    int64    `json:"fix"`           // unix ms of the GPS fix or manual placement
+}
 
 type Team struct {
 	ID        string `json:"id"`
@@ -47,9 +60,10 @@ type Item struct {
 	UpdatedBy string       `json:"updatedBy"`
 	UpdatedAt int64        `json:"updatedAt"` // unix ms, set by the editing client
 	Deleted   bool         `json:"deleted,omitempty"`
+	Pos       *PosMeta     `json:"pos,omitempty"` // positions only
 }
 
-// Position is the latest known location of a user.
+// Position is a user's latest location, derived from their position object.
 type Position struct {
 	UserID   string   `json:"userId"`
 	Callsign string   `json:"callsign"`
@@ -58,16 +72,18 @@ type Position struct {
 	Accuracy float64  `json:"acc,omitempty"` // meters
 	Heading  *float64 `json:"hdg,omitempty"` // degrees true
 	Speed    *float64 `json:"spd,omitempty"` // m/s
-	TS       int64    `json:"ts"`            // unix ms of the GPS fix
+	TS       int64    `json:"ts"`            // unix ms of the GPS fix or manual placement
+	Source   string   `json:"source"`        // "gps" or "manual"
 }
 
 type User struct {
-	ID        string `json:"id"`
-	TeamID    string `json:"teamId"`
-	Callsign  string `json:"callsign"`
-	FolderID  string `json:"folderId"`          // personal folder
-	OwnerID   string `json:"ownerId,omitempty"` // set for agents: the user who owns them
-	CreatedAt int64  `json:"createdAt"`
+	ID         string `json:"id"`
+	TeamID     string `json:"teamId"`
+	Callsign   string `json:"callsign"`
+	FolderID   string `json:"folderId"`          // personal folder
+	PositionID string `json:"positionId"`        // id of their position object
+	OwnerID    string `json:"ownerId,omitempty"` // set for agents: the user who owns them
+	CreatedAt  int64  `json:"createdAt"`
 }
 
 // IsAgent reports whether u is an agent (a sub-user acting for OwnerID).
@@ -75,15 +91,16 @@ func (u User) IsAgent() bool { return u.OwnerID != "" }
 
 // PublicUser is what other team members get to see.
 type PublicUser struct {
-	ID       string `json:"id"`
-	Callsign string `json:"callsign"`
-	FolderID string `json:"folderId"`
-	OwnerID  string `json:"ownerId,omitempty"` // agents only
-	Revoked  bool   `json:"revoked,omitempty"` // agents only
+	ID         string `json:"id"`
+	Callsign   string `json:"callsign"`
+	FolderID   string `json:"folderId"`
+	PositionID string `json:"positionId"`
+	OwnerID    string `json:"ownerId,omitempty"` // agents only
+	Revoked    bool   `json:"revoked,omitempty"` // agents only
 }
 
 func (u User) Public() PublicUser {
-	return PublicUser{ID: u.ID, Callsign: u.Callsign, FolderID: u.FolderID, OwnerID: u.OwnerID}
+	return PublicUser{ID: u.ID, Callsign: u.Callsign, FolderID: u.FolderID, PositionID: u.PositionID, OwnerID: u.OwnerID}
 }
 
 type Invite struct {
@@ -306,9 +323,9 @@ func (s *Store) Join(inviteToken, callsign string) (User, Team, string, error) {
 		return User{}, Team{}, "", err
 	}
 	token := randHex(32)
-	u := User{ID: NewUUID(), TeamID: inv.TeamID, Callsign: callsign, FolderID: NewUUID(), CreatedAt: time.Now().UnixMilli()}
-	_, err = tx.Exec(`INSERT INTO users (id, team_id, callsign, token_hash, created_at, folder_id) VALUES (?, ?, ?, ?, ?, ?)`,
-		u.ID, u.TeamID, u.Callsign, hashToken(token), u.CreatedAt, u.FolderID)
+	u := User{ID: NewUUID(), TeamID: inv.TeamID, Callsign: callsign, FolderID: NewUUID(), PositionID: NewUUID(), CreatedAt: time.Now().UnixMilli()}
+	_, err = tx.Exec(`INSERT INTO users (id, team_id, callsign, token_hash, created_at, folder_id, position_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.TeamID, u.Callsign, hashToken(token), u.CreatedAt, u.FolderID, u.PositionID)
 	if err != nil {
 		// A team shares one link, so callsigns are what tell people apart.
 		if strings.Contains(err.Error(), "users.team_id, users.callsign") {
@@ -331,38 +348,65 @@ func (s *Store) Join(inviteToken, callsign string) (User, Team, string, error) {
 
 func (s *Store) UserByToken(token string) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, team_id, callsign, folder_id, owner_id, created_at FROM users WHERE token_hash = ? AND revoked = 0`, hashToken(token)).
-		Scan(&u.ID, &u.TeamID, &u.Callsign, &u.FolderID, &u.OwnerID, &u.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, team_id, callsign, folder_id, position_id, owner_id, created_at FROM users WHERE token_hash = ? AND revoked = 0`, hashToken(token)).
+		Scan(&u.ID, &u.TeamID, &u.Callsign, &u.FolderID, &u.PositionID, &u.OwnerID, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUnauthorized
 	}
 	return u, err
 }
 
-// RemoveUser deletes a user (invalidating their token and dropping their
-// position) and returns the team they were in. Items they created stay.
-// The user's agents are revoked, not deleted, so their work keeps its author.
-func (s *Store) RemoveUser(id string) (teamID string, err error) {
+// RemoveUser deletes a user (invalidating their token) and returns the team
+// they were in plus the tombstones of the positions that went away (theirs
+// and their agents'), for broadcasting. Items they created stay. The user's
+// agents are revoked, not deleted, so their work keeps its author.
+func (s *Store) RemoveUser(id string) (teamID string, gone []Item, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer tx.Rollback()
+	if gone, err = tombstonePositions(tx, `id = ?2 OR owner_id = ?2`, id); err != nil {
+		return "", nil, err
+	}
 	err = tx.QueryRow(`DELETE FROM users WHERE id = ? RETURNING team_id`, id).Scan(&teamID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotFound
+		return "", nil, ErrNotFound
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if _, err := tx.Exec(revokeSQL+` WHERE owner_id = ?`, id); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return teamID, tx.Commit()
+	return teamID, gone, tx.Commit()
+}
+
+// tombstonePositions deletes the live position objects of the users matching
+// where (a condition on the users table, using ?2 for arg) and returns the
+// tombstones.
+func tombstonePositions(tx *sql.Tx, where string, arg any) ([]Item, error) {
+	now := time.Now().UnixMilli()
+	rows, err := tx.Query(`UPDATE items SET deleted = 1, coords = '[]', meta = '', updated_at = max(updated_at + 1, ?1)
+		WHERE kind = 'position' AND deleted = 0 AND id IN (SELECT position_id FROM users WHERE `+where+`)
+		RETURNING id, created_by, updated_by, updated_at`, now, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it := Item{Kind: KindPosition, Deleted: true}
+		if err := rows.Scan(&it.ID, &it.CreatedBy, &it.UpdatedBy, &it.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Users(teamID string) ([]PublicUser, error) {
-	rows, err := s.db.Query(`SELECT id, callsign, folder_id, owner_id, revoked FROM users WHERE team_id = ? ORDER BY callsign`, teamID)
+	rows, err := s.db.Query(`SELECT id, callsign, folder_id, position_id, owner_id, revoked FROM users WHERE team_id = ? ORDER BY callsign`, teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +414,7 @@ func (s *Store) Users(teamID string) ([]PublicUser, error) {
 	out := []PublicUser{}
 	for rows.Next() {
 		var u PublicUser
-		if err := rows.Scan(&u.ID, &u.Callsign, &u.FolderID, &u.OwnerID, &u.Revoked); err != nil {
+		if err := rows.Scan(&u.ID, &u.Callsign, &u.FolderID, &u.PositionID, &u.OwnerID, &u.Revoked); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -380,14 +424,20 @@ func (s *Store) Users(teamID string) ([]PublicUser, error) {
 
 // --- items ---
 
-const itemCols = `id, kind, name, color, remarks, coords, folder, created_by, updated_by, updated_at, deleted`
+const itemCols = `id, kind, name, color, remarks, coords, folder, created_by, updated_by, updated_at, deleted, meta`
 
 func scanItem(row interface{ Scan(...any) error }, extra ...any) (Item, error) {
 	var it Item
-	var coords string
-	dest := append([]any{&it.ID, &it.Kind, &it.Name, &it.Color, &it.Remarks, &coords, &it.Folder, &it.CreatedBy, &it.UpdatedBy, &it.UpdatedAt, &it.Deleted}, extra...)
+	var coords, meta string
+	dest := append([]any{&it.ID, &it.Kind, &it.Name, &it.Color, &it.Remarks, &coords, &it.Folder, &it.CreatedBy, &it.UpdatedBy, &it.UpdatedAt, &it.Deleted, &meta}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return Item{}, err
+	}
+	if meta != "" && it.Kind == KindPosition {
+		it.Pos = &PosMeta{}
+		if err := json.Unmarshal([]byte(meta), it.Pos); err != nil {
+			return Item{}, fmt.Errorf("item %s meta: %w", it.ID, err)
+		}
 	}
 	if err := json.Unmarshal([]byte(coords), &it.Coords); err != nil {
 		return Item{}, fmt.Errorf("item %s coords: %w", it.ID, err)
@@ -404,6 +454,7 @@ func scanItem(row interface{ Scan(...any) error }, extra ...any) (Item, error) {
 // another team is refused, as is deleting a personal or non-empty folder.
 // A map object sent without a folder goes into the user's personal folder.
 // Agents may only write map objects inside their own folder (ErrForbidden).
+// A position object can only be written by its user, at their position id.
 func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -426,10 +477,27 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 		return Item{}, false, err
 	case curTeam != teamID:
 		return Item{}, false, ErrForeignItem
-	case in.UpdatedAt < cur.UpdatedAt || (in.UpdatedAt == cur.UpdatedAt && in.UpdatedBy <= cur.UpdatedBy):
-		return cur, false, nil
 	default:
 		in.CreatedBy = cur.CreatedBy
+	}
+	// Permissions are checked before last-write-wins, so a forbidden write is
+	// reported as forbidden however old its timestamp is.
+	stale := cur.ID != "" && (in.UpdatedAt < cur.UpdatedAt || (in.UpdatedAt == cur.UpdatedAt && in.UpdatedBy <= cur.UpdatedBy))
+	if in.Kind == KindPosition || cur.Kind == KindPosition {
+		// Only your own, at your fixed id, always in your folder, named after you.
+		if in.ID != by.PositionID || in.Kind != KindPosition || (cur.ID != "" && cur.CreatedBy != by.ID) {
+			return cur, false, ErrForbidden
+		}
+		in.Folder, in.Name = by.FolderID, by.Callsign
+	} else if cur.ID == "" {
+		// Nobody may squat on someone's position id with another kind.
+		var n int
+		if err := tx.QueryRow(`SELECT count(*) FROM users WHERE position_id = ?`, in.ID).Scan(&n); err != nil {
+			return Item{}, false, err
+		}
+		if n > 0 {
+			return cur, false, ErrForbidden
+		}
 	}
 	if by.IsAgent() {
 		// Both the object as it is and as it would be must sit in the agent's folder.
@@ -437,6 +505,9 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 			(cur.ID != "" && (cur.Kind == KindFolder || cur.Folder != by.FolderID)) {
 			return cur, false, ErrForbidden
 		}
+	}
+	if stale {
+		return cur, false, nil
 	}
 	if in.Deleted && cur.Kind == KindFolder && !cur.Deleted {
 		var users, items int
@@ -453,12 +524,17 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 		in = Item{ID: in.ID, Kind: in.Kind, CreatedBy: in.CreatedBy, UpdatedBy: in.UpdatedBy, UpdatedAt: in.UpdatedAt, Deleted: true}
 	}
 	coords, _ := json.Marshal(in.Coords)
-	_, err = tx.Exec(`INSERT INTO items (id, team_id, kind, name, color, remarks, coords, folder, created_by, updated_by, updated_at, deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	meta := ""
+	if in.Pos != nil {
+		b, _ := json.Marshal(in.Pos)
+		meta = string(b)
+	}
+	_, err = tx.Exec(`INSERT INTO items (id, team_id, kind, name, color, remarks, coords, folder, created_by, updated_by, updated_at, deleted, meta)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, name = excluded.name, color = excluded.color,
 			remarks = excluded.remarks, coords = excluded.coords, folder = excluded.folder,
-			updated_by = excluded.updated_by, updated_at = excluded.updated_at, deleted = excluded.deleted`,
-		in.ID, teamID, in.Kind, in.Name, in.Color, in.Remarks, string(coords), in.Folder, in.CreatedBy, in.UpdatedBy, in.UpdatedAt, in.Deleted)
+			updated_by = excluded.updated_by, updated_at = excluded.updated_at, deleted = excluded.deleted, meta = excluded.meta`,
+		in.ID, teamID, in.Kind, in.Name, in.Color, in.Remarks, string(coords), in.Folder, in.CreatedBy, in.UpdatedBy, in.UpdatedAt, in.Deleted, meta)
 	if err != nil {
 		return Item{}, false, err
 	}
@@ -484,23 +560,10 @@ func (s *Store) Items(teamID string) ([]Item, error) {
 
 // --- positions ---
 
-// SetPosition records p as the latest fix of user u and reports whether it
-// was stored. Fixes older than the stored one, or from removed users, are dropped.
-func (s *Store) SetPosition(u User, p Position) (bool, error) {
-	res, err := s.db.Exec(`INSERT INTO positions (user_id, team_id, callsign, lat, lon, acc, hdg, spd, ts)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
-		ON CONFLICT(user_id) DO UPDATE SET callsign = excluded.callsign, lat = excluded.lat, lon = excluded.lon,
-			acc = excluded.acc, hdg = excluded.hdg, spd = excluded.spd, ts = excluded.ts
-		WHERE excluded.ts >= positions.ts`,
-		u.ID, u.TeamID, u.Callsign, p.Lat, p.Lon, p.Accuracy, p.Heading, p.Speed, p.TS, u.ID)
-	if err != nil {
-		return false, err
-	}
-	return affected(res) > 0, nil
-}
-
+// Positions lists the team's known locations, derived from position objects.
 func (s *Store) Positions(teamID string) ([]Position, error) {
-	rows, err := s.db.Query(`SELECT user_id, callsign, lat, lon, acc, hdg, spd, ts FROM positions WHERE team_id = ?`, teamID)
+	rows, err := s.db.Query(`SELECT i.created_by, u.callsign, i.coords, i.meta FROM items i JOIN users u ON u.id = i.created_by
+		WHERE i.team_id = ? AND i.kind = 'position' AND i.deleted = 0`, teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -508,9 +571,16 @@ func (s *Store) Positions(teamID string) ([]Position, error) {
 	out := []Position{}
 	for rows.Next() {
 		var p Position
-		if err := rows.Scan(&p.UserID, &p.Callsign, &p.Lat, &p.Lon, &p.Accuracy, &p.Heading, &p.Speed, &p.TS); err != nil {
+		var coords, meta string
+		if err := rows.Scan(&p.UserID, &p.Callsign, &coords, &meta); err != nil {
 			return nil, err
 		}
+		var c [][2]float64
+		var m PosMeta
+		if json.Unmarshal([]byte(coords), &c) != nil || len(c) != 1 || json.Unmarshal([]byte(meta), &m) != nil {
+			continue
+		}
+		p.Lat, p.Lon, p.Accuracy, p.Heading, p.Speed, p.TS, p.Source = c[0][0], c[0][1], m.Acc, m.Hdg, m.Spd, m.Fix, m.Source
 		out = append(out, p)
 	}
 	return out, rows.Err()

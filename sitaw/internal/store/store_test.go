@@ -19,11 +19,11 @@ func open(t *testing.T) *Store {
 	return s
 }
 
-// objects drops folders, leaving map objects.
+// objects drops folders and positions, leaving drawn map objects.
 func objects(items []Item) []Item {
 	var out []Item
 	for _, it := range items {
-		if it.Kind != KindFolder {
+		if it.Kind != KindFolder && it.Kind != KindPosition {
 			out = append(out, it)
 		}
 	}
@@ -131,36 +131,102 @@ func TestPutItemLWWAndTeams(t *testing.T) {
 	}
 }
 
-func TestPositionsAndRemoveUser(t *testing.T) {
+// setPos writes u's position object as a GPS fix.
+func setPos(s *Store, team string, u User, lat, lon float64, at int64) (Item, bool, error) {
+	return s.PutItem(team, Item{ID: u.PositionID, Kind: KindPosition, Coords: [][2]float64{{lat, lon}},
+		Pos: &PosMeta{Source: "gps", Acc: 5, Fix: at}, UpdatedAt: at}, u)
+}
+
+func TestPositionObjects(t *testing.T) {
 	s := open(t)
 	ta, ia := must2(s.CreateTeam("a"))
-	_, ib := must2(s.CreateTeam("b"))
+	tb, ib := must2(s.CreateTeam("b"))
 	ua, _, _, _ := s.Join(ia.Token, "A")
+	ua2, _, _, _ := s.Join(ia.Token, "A2")
 	ub, _, _, _ := s.Join(ib.Token, "B")
-
-	if ok := must(s.SetPosition(ua, Position{Lat: 1, Lon: 2, TS: 10})); !ok {
-		t.Fatal("position rejected")
+	if ua.PositionID == "" || ua.PositionID == ua2.PositionID {
+		t.Fatalf("position ids: %q %q", ua.PositionID, ua2.PositionID)
 	}
-	if ok := must(s.SetPosition(ua, Position{Lat: 9, Lon: 9, TS: 5})); ok {
+
+	it, ok, err := setPos(s, ta.ID, ua, 1, 2, 10)
+	if !ok || err != nil || it.Folder != ua.FolderID || it.Name != "A" || it.Pos.Source != "gps" {
+		t.Fatalf("own position: %v %v %+v", ok, err, it)
+	}
+	if _, ok, _ := setPos(s, ta.ID, ua, 9, 9, 5); ok {
 		t.Fatal("older fix accepted")
 	}
-	must(s.SetPosition(ub, Position{Lat: 3, Lon: 4, TS: 10}))
+	setPos(s, tb.ID, ub, 3, 4, 10)
 	pa := must(s.Positions(ta.ID))
-	if len(pa) != 1 || pa[0].UserID != ua.ID || pa[0].Lat != 1 {
+	if len(pa) != 1 || pa[0].UserID != ua.ID || pa[0].Lat != 1 || pa[0].Callsign != "A" || pa[0].TS != 10 || pa[0].Source != "gps" {
 		t.Fatalf("team a positions: %+v", pa)
 	}
 
-	if team := must(s.RemoveUser(ua.ID)); team != ta.ID {
-		t.Fatalf("removed from %q", team)
+	// Nobody else may write it, even a teammate; nor may anyone reuse the id.
+	if _, _, err := s.PutItem(ta.ID, Item{ID: ua.PositionID, Kind: KindPosition, Coords: [][2]float64{{0, 0}},
+		Pos: &PosMeta{Source: "manual", Fix: 20}, UpdatedAt: 20}, ua2); err != ErrForbidden {
+		t.Fatalf("teammate writing my position: %v", err)
+	}
+	if _, _, err := s.PutItem(ta.ID, Item{ID: ua2.PositionID, Kind: KindWaypoint, Coords: [][2]float64{{0, 0}}, UpdatedAt: 1}, ua); err != ErrForbidden {
+		t.Fatalf("squatting on a position id: %v", err)
+	}
+	if _, _, err := s.PutItem(ta.ID, Item{ID: NewUUID(), Kind: KindPosition, Coords: [][2]float64{{0, 0}},
+		Pos: &PosMeta{Source: "gps", Fix: 1}, UpdatedAt: 1}, ua); err != ErrForbidden {
+		t.Fatalf("second position object: %v", err)
+	}
+	// Its own user may turn it into a manual one, and delete it (location unknown).
+	man, ok, _ := s.PutItem(ta.ID, Item{ID: ua.PositionID, Kind: KindPosition, Coords: [][2]float64{{5, 6}},
+		Pos: &PosMeta{Source: "manual", Fix: 30}, UpdatedAt: 30}, ua)
+	if !ok || man.Pos.Source != "manual" {
+		t.Fatalf("manual: %+v", man)
+	}
+	if _, ok, _ := s.PutItem(ta.ID, Item{ID: ua.PositionID, Kind: KindPosition, Deleted: true, UpdatedAt: 40}, ua); !ok {
+		t.Fatal("removing own position")
+	}
+	if n := len(must(s.Positions(ta.ID))); n != 0 {
+		t.Fatal("deleted position still listed")
+	}
+	if _, ok, _ := setPos(s, ta.ID, ua, 1, 2, 50); !ok {
+		t.Fatal("position back after unknown")
+	}
+
+	// Removing the user removes their position (tombstone returned for broadcast).
+	team, gone, err := s.RemoveUser(ua.ID)
+	if err != nil || team != ta.ID || len(gone) != 1 || gone[0].ID != ua.PositionID || !gone[0].Deleted {
+		t.Fatalf("remove: %v %q %+v", err, team, gone)
 	}
 	if n := len(must(s.Positions(ta.ID))); n != 0 {
 		t.Fatal("position kept after removal")
 	}
-	if ok := must(s.SetPosition(ua, Position{Lat: 1, Lon: 2, TS: 20})); ok {
-		t.Fatal("removed user's position stored")
-	}
-	if _, err := s.RemoveUser(ua.ID); err != ErrNotFound {
+	if _, _, err := s.RemoveUser(ua.ID); err != ErrNotFound {
 		t.Fatalf("second remove: %v", err)
+	}
+}
+
+// The old positions table becomes position objects on upgrade.
+func TestMigratePositions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.db")
+	s := must(Open(path))
+	team, inv := must2(s.CreateTeam("a"))
+	u, _, _, _ := s.Join(inv.Token, "A")
+	for _, q := range []string{
+		`UPDATE users SET position_id = ''`,
+		`INSERT INTO positions (user_id, team_id, callsign, lat, lon, acc, ts) VALUES ('` + u.ID + `', '` + team.ID + `', 'A', 52.1, 21.2, 7, 1234)`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s = must(Open(path))
+	defer s.Close()
+	ps := must(s.Positions(team.ID))
+	if len(ps) != 1 || ps[0].Lat != 52.1 || ps[0].Accuracy != 7 || ps[0].TS != 1234 || ps[0].Source != "gps" {
+		t.Fatalf("migrated: %+v", ps)
+	}
+	var left int
+	s.db.QueryRow(`SELECT count(*) FROM positions`).Scan(&left)
+	if left != 0 {
+		t.Fatal("old positions rows not cleared")
 	}
 }
 
@@ -385,16 +451,18 @@ func TestAgents(t *testing.T) {
 	if list := must(s.Agents(owner.ID)); len(list) != 3 {
 		t.Fatalf("agents: %+v", list)
 	}
-	if _, err := s.RevokeAgent(other.ID, a.ID); err != ErrNotFound {
+	if _, _, err := s.RevokeAgent(other.ID, a.ID); err != ErrNotFound {
 		t.Fatalf("revoking someone else's agent: %v", err)
 	}
-	if u, err := s.RevokeAgent(owner.ID, a.ID); err != nil || !u.Revoked {
+	if u, _, err := s.RevokeAgent(owner.ID, a.ID); err != nil || !u.Revoked {
 		t.Fatalf("revoke: %v %+v", err, u)
 	}
 	if _, err := s.UserByToken(tok); err != ErrUnauthorized {
 		t.Fatalf("revoked token still works: %v", err)
 	}
-	must(s.RemoveUser(owner.ID))
+	if _, _, err := s.RemoveUser(owner.ID); err != nil {
+		t.Fatal(err)
+	}
 	for _, ag := range must(s.Agents(owner.ID)) {
 		if !ag.Revoked {
 			t.Fatalf("agent of removed owner still active: %+v", ag)

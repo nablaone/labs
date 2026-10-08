@@ -2,7 +2,7 @@
 // other display formats (DD, DMS, UTM) plug in here and get picked from settings.
 // Input accepts MGRS and lat/lon in degrees (see parseAnyCoord).
 
-import { toMGRS, parseMGRS } from './mgrs.js';
+import { toMGRS, parseMGRS, utmZone, centralMeridian } from './mgrs.js';
 
 export function formatCoord(lat, lon) {
   return toMGRS(lat, lon, 5) ?? formatDegrees(lat, lon);
@@ -14,6 +14,36 @@ export function formatDegrees(lat, lon) {
 
 export function formatDistance(m) {
   return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 2 : 1)} km`;
+}
+
+// Area: m² below 1 ha, then ha below 1 km², then km².
+export function formatArea(m2) {
+  if (m2 < 10000) return `${Math.round(m2)} m²`;
+  if (m2 < 1e6) return `${(m2 / 10000).toFixed(m2 < 100000 ? 2 : 1)} ha`;
+  return `${(m2 / 1e6).toFixed(m2 < 1e7 ? 2 : 1)} km²`;
+}
+
+const D2R = Math.PI / 180;
+
+// Initial true bearing from point 1 to point 2, degrees [0, 360).
+export function bearingTrue(lat1, lon1, lat2, lon2) {
+  const p1 = lat1 * D2R, p2 = lat2 * D2R, dl = (lon2 - lon1) * D2R;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(y, x) / D2R + 360) % 360;
+}
+
+// Grid bearing (relative to MGRS/UTM grid north), as the team navigates by
+// the grid: true bearing minus the grid convergence at the start point.
+// Matches bearingGridDeg of the agent API (internal/geo).
+export function bearingGrid(lat1, lon1, lat2, lon2) {
+  const dl = (lon1 - centralMeridian(utmZone(lat1, lon1))) * D2R;
+  const convergence = Math.atan(Math.tan(dl) * Math.sin(lat1 * D2R)) / D2R;
+  return (bearingTrue(lat1, lon1, lat2, lon2) - convergence + 360) % 360;
+}
+
+export function formatBearing(deg) {
+  return `${String(Math.round(deg) % 360).padStart(3, '0')}°`;
 }
 
 // Parses anything a person might type as a position:

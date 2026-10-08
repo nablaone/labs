@@ -77,5 +77,8 @@ func (s *Store) ImportLegacyJSON(path, name string) (Team, error) {
 	if err := s.backfillFolders(); err != nil {
 		return Team{}, err
 	}
+	if err := s.positionsToObjects(); err != nil {
+		return Team{}, err
+	}
 	return t, os.Rename(path, path+".imported")
 }

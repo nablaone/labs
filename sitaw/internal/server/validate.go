@@ -58,6 +58,18 @@ func validateItem(it *store.Item) error {
 		}
 		return nil
 	}
+	if it.Kind == store.KindPosition {
+		p := it.Pos
+		if len(it.Coords) != 1 || !validLatLon(it.Coords[0][0], it.Coords[0][1]) {
+			return errors.New("position needs exactly one valid point")
+		}
+		if p == nil || (p.Source != "gps" && p.Source != "manual") || p.Acc < 0 || p.Acc > 1e6 {
+			return errors.New(`position needs pos: {source: "gps"|"manual", acc, fix}`)
+		}
+		it.Color, it.Remarks = "", ""
+		return nil
+	}
+	it.Pos = nil // only positions carry position metadata
 	minPts := map[string]int{store.KindWaypoint: 1, store.KindLine: 2, store.KindArea: 3}[it.Kind]
 	if minPts == 0 {
 		return errors.New("bad kind")

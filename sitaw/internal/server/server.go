@@ -20,7 +20,7 @@ type Server struct {
 	hub        *Hub
 	static     fs.FS
 	adminToken string
-	baseURL    string
+	baseURL    string // external address; "" = derive from each request
 	log        *slog.Logger
 	limiter    *rateLimiter
 }
@@ -37,8 +37,9 @@ func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Lo
 	}
 }
 
-func (s *Server) InviteURL(token string) string {
-	return s.baseURL + "/join?t=" + token
+// InviteURL is the join link for token, at the address the caller sees.
+func (s *Server) InviteURL(r *http.Request, token string) string {
+	return s.publicURL(r) + "/join?t=" + token
 }
 
 func (s *Server) Handler() http.Handler {
@@ -203,11 +204,11 @@ type inviteRow struct {
 	Active bool   `json:"active"`
 }
 
-func (s *Server) inviteRow(i store.Invite) inviteRow {
-	return inviteRow{Invite: i, URL: s.InviteURL(i.Token), Active: i.Active(time.Now())}
+func (s *Server) inviteRow(r *http.Request, i store.Invite) inviteRow {
+	return inviteRow{Invite: i, URL: s.InviteURL(r, i.Token), Active: i.Active(time.Now())}
 }
 
-func (s *Server) handleListTeams(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 	teams, err := s.store.Teams()
 	if err != nil {
 		s.internal(w, err)
@@ -230,11 +231,11 @@ func (s *Server) handleListTeams(w http.ResponseWriter, _ *http.Request) {
 			s.internal(w, err)
 			return
 		}
-		r := row{Team: t, Members: len(users), Invites: []inviteRow{}}
+		tr := row{Team: t, Members: len(users), Invites: []inviteRow{}}
 		for _, i := range invs {
-			r.Invites = append(r.Invites, s.inviteRow(i))
+			tr.Invites = append(tr.Invites, s.inviteRow(r, i))
 		}
-		out = append(out, r)
+		out = append(out, tr)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -250,8 +251,8 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
-	s.log.Info("team created", "team", t.Name, "invite", s.InviteURL(inv.Token))
-	writeJSON(w, http.StatusOK, map[string]any{"team": t, "invite": s.inviteRow(inv), "url": s.InviteURL(inv.Token)})
+	s.log.Info("team created", "team", t.Name, "invite", s.InviteURL(r, inv.Token))
+	writeJSON(w, http.StatusOK, map[string]any{"team": t, "invite": s.inviteRow(r, inv), "url": s.InviteURL(r, inv.Token)})
 }
 
 // handleCreateInvite adds another link to a team, e.g. to rotate a leaked one.
@@ -274,7 +275,7 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"invite": s.inviteRow(inv), "url": s.InviteURL(inv.Token)})
+	writeJSON(w, http.StatusOK, map[string]any{"invite": s.inviteRow(r, inv), "url": s.InviteURL(r, inv.Token)})
 }
 
 func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +304,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 // connections are closed and the rest of their team drops their marker.
 func (s *Server) handleKickUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	teamID, err := s.store.RemoveUser(id)
+	teamID, gone, err := s.store.RemoveUser(id)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "not found")
 		return
@@ -314,6 +315,9 @@ func (s *Server) handleKickUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.kick(id)
 	s.hub.broadcast(teamID, msg{T: "leave", UserID: id})
+	for i := range gone {
+		s.hub.broadcast(teamID, msg{T: "item", Item: &gone[i]})
+	}
 	s.log.Info("user kicked", "id", id)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -6,7 +6,7 @@
 // on (updatedAt, updatedBy), the same rule the server uses.
 //
 // Events (CustomEvent.detail): status {online}, reset {items, source},
-// item {item}, pos {pos}, positions {positions}, user {user}, leave {userId},
+// item {item}, user {user}, leave {userId},
 // you {user, team}, unauthorized, rejected {id, error}.
 // reset.source is 'cache' (local replica at startup) or 'server' (snapshot).
 
@@ -21,11 +21,9 @@ export class Sync extends EventTarget {
     this.userId = userId;
     this.teamId = teamId; // undefined for sessions created before teams existed
     this.items = new Map();
-    this.positions = new Map();
     this.users = new Map(); // team roster from the last snapshot
     this.outbox = new Map();
     this.online = false;
-    this.pendingPos = null;
     this.backoff = 1000;
     this.clockOffset = 0; // server time - local time, ms
   }
@@ -51,12 +49,11 @@ export class Sync extends EventTarget {
       }
       for (const it of await db.all('items')) this.items.set(it.id, it);
       for (const it of await db.all('outbox')) this.outbox.set(it.id, it);
-      for (const p of (await db.get('kv', 'positions')) ?? []) this.positions.set(p.userId, p);
+      await db.del('kv', 'positions'); // pre-v4 cache of positions; they are items now
     } catch (e) {
       console.error('loading local cache failed', e);
     }
     this.emit('reset', { items: this.liveItems(), source: 'cache' });
-    this.emit('positions', { positions: [...this.positions.values()] });
     this.connect();
     window.addEventListener('online', () => this.reconnectNow());
   }
@@ -146,13 +143,9 @@ export class Sync extends EventTarget {
         this.items = next;
         await db.clear('items');
         for (const it of next.values()) await db.put('items', it.id, it);
-        this.positions = new Map((m.positions ?? []).map((p) => [p.userId, p]));
-        this.savePositions();
-        this.emit('positions', { positions: [...this.positions.values()] });
         this.emit('reset', { items: this.liveItems(), source: 'server' });
 
         for (const it of this.outbox.values()) this.send({ t: 'put', item: it });
-        if (this.pendingPos) this.sendPos(this.pendingPos);
         break;
       }
       case 'item':
@@ -173,20 +166,12 @@ export class Sync extends EventTarget {
         if (m.error) this.emit('rejected', { id: m.id, error: m.error });
         break;
       }
-      case 'pos':
-        this.positions.set(m.pos.userId, m.pos);
-        if (!this.users.has(m.pos.userId)) this.users.set(m.pos.userId, { id: m.pos.userId, callsign: m.pos.callsign });
-        this.savePositions();
-        this.emit('pos', { pos: m.pos });
-        break;
       case 'user':
         this.users.set(m.user.id, m.user);
         this.emit('user', { user: m.user });
         break;
       case 'leave':
-        this.positions.delete(m.userId);
         this.users.delete(m.userId);
-        this.savePositions();
         this.emit('leave', { userId: m.userId });
         break;
     }
@@ -225,14 +210,21 @@ export class Sync extends EventTarget {
     if (prev) return this.putItem({ id, kind: prev.kind, deleted: true });
   }
 
-  // Only the latest fix matters; offline fixes are not queued.
-  sendPos(pos) {
-    this.pendingPos = this.send({ t: 'pos', pos }) ? null : pos;
-  }
-
-  savePositions() {
-    clearTimeout(this.posSave);
-    this.posSave = setTimeout(() => db.put('kv', 'positions', [...this.positions.values()]), 2000);
+  // Everyone's latest location, by user id, derived from position objects
+  // (kind "position", one per user). Same shape the UI used before positions
+  // became objects: {userId, callsign, lat, lon, acc, hdg, spd, ts, source, itemId}.
+  get positions() {
+    const out = new Map();
+    for (const it of this.items.values()) {
+      if (it.kind !== 'position' || it.deleted || !it.coords?.length) continue;
+      const p = it.pos ?? {};
+      out.set(it.createdBy, {
+        userId: it.createdBy, callsign: this.users.get(it.createdBy)?.callsign ?? it.name,
+        lat: it.coords[0][0], lon: it.coords[0][1], acc: p.acc, hdg: p.hdg, spd: p.spd,
+        ts: p.fix ?? it.updatedAt, source: p.source ?? 'gps', itemId: it.id,
+      });
+    }
+    return out;
   }
 
   get pendingCount() {

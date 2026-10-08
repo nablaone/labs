@@ -151,7 +151,8 @@ implemented but have not been tested by hand in a browser yet.
 | App shell works offline (PWA, service worker) | MVP | [x] | |
 | Last known team state shown offline | MVP | [x] | Cached in IndexedDB |
 | Create, edit and delete items offline | MVP | [x] | IndexedDB outbox, flushed on reconnect |
-| Own position while offline | MVP | [x] | Shown locally; only the latest fix is sent on reconnect |
+| Own position while offline | MVP | [x] | Position is an object: the latest fix waits in the outbox and syncs on reconnect |
+| Manual position / location unknown | MVP | [x] | Set at the crosshair when GPS is off (sticks until USE GPS), or remove it ("unknown") |
 | Tile cache for viewed areas | MVP | [x] | Cache-first, capped size |
 | Pre-download an area's tiles | Next | [ ] | |
 | Connection state indicator | MVP | [x] | |

@@ -74,9 +74,9 @@ func (s *Store) CreateAgent(owner User) (User, string, error) {
 	}
 
 	token := AgentTokenPrefix + randHex(24)
-	a := User{ID: NewUUID(), TeamID: owner.TeamID, Callsign: callsign, FolderID: NewUUID(), OwnerID: owner.ID, CreatedAt: time.Now().UnixMilli()}
-	if _, err := tx.Exec(`INSERT INTO users (id, team_id, callsign, token_hash, created_at, folder_id, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.TeamID, a.Callsign, hashToken(token), a.CreatedAt, a.FolderID, a.OwnerID); err != nil {
+	a := User{ID: NewUUID(), TeamID: owner.TeamID, Callsign: callsign, FolderID: NewUUID(), PositionID: NewUUID(), OwnerID: owner.ID, CreatedAt: time.Now().UnixMilli()}
+	if _, err := tx.Exec(`INSERT INTO users (id, team_id, callsign, token_hash, created_at, folder_id, position_id, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.TeamID, a.Callsign, hashToken(token), a.CreatedAt, a.FolderID, a.PositionID, a.OwnerID); err != nil {
 		return User{}, "", err
 	}
 	if err := createPersonalFolder(tx, a); err != nil {
@@ -104,16 +104,29 @@ func (s *Store) Agents(ownerID string) ([]Agent, error) {
 	return out, rows.Err()
 }
 
-// RevokeAgent disables an agent's token. The agent stays in the roster (as
-// revoked) so its folder and objects keep their author.
-func (s *Store) RevokeAgent(ownerID, agentID string) (PublicUser, error) {
-	var u PublicUser
-	err := s.db.QueryRow(revokeSQL+` WHERE id = ? AND owner_id = ? RETURNING id, callsign, folder_id, owner_id, revoked`,
-		agentID, ownerID).Scan(&u.ID, &u.Callsign, &u.FolderID, &u.OwnerID, &u.Revoked)
-	if errors.Is(err, sql.ErrNoRows) {
-		return PublicUser{}, ErrNotFound
+// RevokeAgent disables an agent's token and removes its position (if it
+// had one; returned as a tombstone to broadcast). The agent stays in the
+// roster (as revoked) so its folder and objects keep their author.
+func (s *Store) RevokeAgent(ownerID, agentID string) (PublicUser, []Item, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PublicUser{}, nil, err
 	}
-	return u, err
+	defer tx.Rollback()
+	var u PublicUser
+	err = tx.QueryRow(revokeSQL+` WHERE id = ? AND owner_id = ? RETURNING id, callsign, folder_id, position_id, owner_id, revoked`,
+		agentID, ownerID).Scan(&u.ID, &u.Callsign, &u.FolderID, &u.PositionID, &u.OwnerID, &u.Revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublicUser{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return PublicUser{}, nil, err
+	}
+	gone, err := tombstonePositions(tx, `id = ?2`, agentID)
+	if err != nil {
+		return PublicUser{}, nil, err
+	}
+	return u, gone, tx.Commit()
 }
 
 // TouchUser records that a user (in practice: an agent) used its token.

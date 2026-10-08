@@ -28,7 +28,7 @@ func setup(t *testing.T) (*httptest.Server, *store.Store, string) {
 	t.Cleanup(func() { st.Close() })
 	static := fstest.MapFS{"index.html": {Data: []byte("<html>")}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := New(st, static, "admintok", "http://x", log)
+	srv := New(st, static, "admintok", "", log) // "" = derive the address from requests
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	_, inv, err := st.CreateTeam("alpha")
@@ -97,15 +97,23 @@ func readNot(t *testing.T, c *websocket.Conn, typ string, forbid ...string) msg 
 	}
 }
 
-// objects counts non-folder items.
+// objects counts drawn map objects (not folders or positions).
 func objects(items []store.Item) int {
 	n := 0
 	for _, it := range items {
-		if it.Kind != store.KindFolder {
+		if it.Kind != store.KindFolder && it.Kind != store.KindPosition {
 			n++
 		}
 	}
 	return n
+}
+
+// putPos sends the connection's own position as a position object.
+func putPos(t *testing.T, c *websocket.Conn, positionID string, lat, lon float64) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	write(t, c, map[string]any{"t": "put", "item": map[string]any{"id": positionID, "kind": "position",
+		"coords": [][2]float64{{lat, lon}}, "pos": map[string]any{"source": "gps", "acc": 5, "fix": now}, "updatedAt": now}})
 }
 
 func write(t *testing.T, c *websocket.Conn, v any) {
@@ -143,14 +151,21 @@ func TestSyncBroadcast(t *testing.T) {
 		t.Fatalf("bad snapshot: %+v", snap)
 	}
 	b := dial(t, ts, tokB)
-	read(t, b, "snapshot")
+	snapB := read(t, b, "snapshot")
 
-	// Position from A reaches B, stamped with A's identity.
-	write(t, a, map[string]any{"t": "pos", "pos": map[string]any{"lat": 52.1, "lon": 21.0, "ts": time.Now().UnixMilli(), "userId": "spoofed"}})
-	p := read(t, b, "pos")
-	if p.Pos.UserID != idA || p.Pos.Callsign != "ALPHA" {
-		t.Fatalf("pos: %+v", p.Pos)
+	// A's position (a position object) reaches B, stamped with A's identity.
+	putPos(t, a, snap.You.PositionID, 52.1, 21.0)
+	read(t, a, "ack")
+	p := read(t, b, "item")
+	if p.Item.Kind != "position" || p.Item.CreatedBy != idA || p.Item.Name != "ALPHA" || p.Item.Pos.Source != "gps" {
+		t.Fatalf("position: %+v", p.Item)
 	}
+	// B can't move A's position.
+	putPos(t, b, snap.You.PositionID, 0, 0)
+	if ack := read(t, b, "ack"); *ack.OK || ack.Error == "" {
+		t.Fatalf("B moved A's position: %+v", ack)
+	}
+	_ = snapB
 
 	// Item from A is acked to A and broadcast to B.
 	item := map[string]any{"id": "6f1c2c1e-0000-4000-8000-000000000001", "kind": "line", "name": "L1", "coords": [][2]float64{{52, 21}, {52.1, 21.1}}, "updatedAt": 1000}
@@ -183,8 +198,15 @@ func TestSyncBroadcast(t *testing.T) {
 	tokC, _ := join(t, ts, invite, "CHARLIE")
 	c := dial(t, ts, tokC)
 	snap = read(t, c, "snapshot")
-	if objects(snap.Items) != 1 || len(snap.Items) != 4 || len(snap.Positions) != 1 || len(snap.Users) != 3 {
-		t.Fatalf("late snapshot: items=%d positions=%d users=%d", len(snap.Items), len(snap.Positions), len(snap.Users))
+	positions := 0
+	for _, it := range snap.Items {
+		if it.Kind == store.KindPosition {
+			positions++
+		}
+	}
+	// 3 personal folders + the line + ALPHA's position.
+	if objects(snap.Items) != 1 || len(snap.Items) != 5 || positions != 1 || len(snap.Users) != 3 {
+		t.Fatalf("late snapshot: items=%d positions=%d users=%d", len(snap.Items), positions, len(snap.Users))
 	}
 }
 
@@ -211,11 +233,11 @@ func TestAdminTeams(t *testing.T) {
 		URL  string     `json:"url"`
 	}
 	json.NewDecoder(r.Body).Decode(&out)
-	if r.StatusCode != 200 || out.Team.Name != "bravo" || !strings.HasPrefix(out.URL, "http://x/join?t=") {
+	if r.StatusCode != 200 || out.Team.Name != "bravo" || !strings.HasPrefix(out.URL, ts.URL+"/join?t=") {
 		t.Fatalf("create team: %d %+v", r.StatusCode, out)
 	}
 	// The join screen can show which team a link leads to.
-	token := strings.TrimPrefix(out.URL, "http://x/join?t=")
+	token := strings.TrimPrefix(out.URL, ts.URL+"/join?t=")
 	r, _ = http.Get(ts.URL + "/api/invites/" + token)
 	var info struct {
 		Team struct{ Name string } `json:"team"`
@@ -257,36 +279,36 @@ func TestTeamIsolation(t *testing.T) {
 	tokB, _ := join(t, ts, invB.Token, "BRAVO")
 
 	a := dial(t, ts, tokA)
-	read(t, a, "snapshot")
+	snapA := read(t, a, "snapshot")
 	b := dial(t, ts, tokB)
-	read(t, b, "snapshot")
+	snapB := read(t, b, "snapshot")
 
 	id := "6f1c2c1e-0000-4000-8000-0000000000aa"
 	write(t, a, map[string]any{"t": "put", "item": map[string]any{"id": id, "kind": "waypoint", "name": "SECRET",
 		"coords": [][2]float64{{52, 21}}, "updatedAt": 1000}})
 	read(t, a, "ack")
-	write(t, a, map[string]any{"t": "pos", "pos": map[string]any{"lat": 52, "lon": 21, "ts": time.Now().UnixMilli()}})
-	read(t, a, "pos")
+	putPos(t, a, snapA.You.PositionID, 52, 21)
+	read(t, a, "ack")
 
 	// B tries to overwrite A's item by id: refused, and A's copy is untouched.
 	write(t, b, map[string]any{"t": "put", "item": map[string]any{"id": id, "kind": "waypoint", "name": "PWNED",
 		"coords": [][2]float64{{0, 0}}, "updatedAt": 9999}})
-	ack := readNot(t, b, "ack", "item", "pos")
+	ack := readNot(t, b, "ack", "item")
 	if *ack.OK || ack.Item != nil {
 		t.Fatalf("cross-team put: %+v", ack)
 	}
 
-	// B never got A's item or position: the first pos B sees is its own.
-	write(t, b, map[string]any{"t": "pos", "pos": map[string]any{"lat": 1, "lon": 1, "ts": time.Now().UnixMilli()}})
-	if m := readNot(t, b, "pos", "item"); m.Pos.Callsign != "BRAVO" {
-		t.Fatalf("B received A's position: %+v", m.Pos)
+	// B never got A's item or position: the first item B sees is its own position.
+	putPos(t, b, snapB.You.PositionID, 1, 1)
+	if m := readNot(t, b, "item"); m.Item.Name != "BRAVO" {
+		t.Fatalf("B received A's data: %+v", m.Item)
 	}
 
 	// A fresh snapshot for B is still empty of A's data.
 	b2 := dial(t, ts, tokB)
 	snap := read(t, b2, "snapshot")
-	if objects(snap.Items) != 0 || len(snap.Items) != 1 || len(snap.Users) != 1 || len(snap.Positions) != 1 || snap.Team.Name != "bravo" {
-		t.Fatalf("B snapshot leaks: items=%d users=%d positions=%d", len(snap.Items), len(snap.Users), len(snap.Positions))
+	if objects(snap.Items) != 0 || len(snap.Items) != 2 || len(snap.Users) != 1 || snap.Team.Name != "bravo" {
+		t.Fatalf("B snapshot leaks: items=%d users=%d", len(snap.Items), len(snap.Users))
 	}
 	a2 := dial(t, ts, tokA)
 	snap = read(t, a2, "snapshot")

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -29,7 +30,80 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	return s.backfillFolders()
+	if err := s.backfillFolders(); err != nil {
+		return err
+	}
+	// v4: positions are objects (kind "position") with metadata in items.meta.
+	if err := addColumn(s.db, "items", "meta", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumn(s.db, "users", "position_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.positionsToObjects()
+}
+
+// positionsToObjects gives every user a position id and turns rows of the old
+// positions table into position objects in the users' folders.
+func (s *Store) positionsToObjects() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id FROM users WHERE position_id = ''`)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err := tx.Exec(`UPDATE users SET position_id = ? WHERE id = ?`, NewUUID(), id); err != nil {
+			return err
+		}
+	}
+	rows, err = tx.Query(`SELECT u.position_id, u.team_id, u.folder_id, u.id, u.callsign, p.lat, p.lon, p.acc, p.hdg, p.spd, p.ts
+		FROM positions p JOIN users u ON u.id = p.user_id
+		WHERE NOT EXISTS (SELECT 1 FROM items WHERE items.id = u.position_id)`)
+	if err != nil {
+		return err
+	}
+	type old struct {
+		posID, team, folder, user, callsign string
+		lat, lon, acc                       float64
+		hdg, spd                            *float64
+		ts                                  int64
+	}
+	var olds []old
+	for rows.Next() {
+		var o old
+		if err := rows.Scan(&o.posID, &o.team, &o.folder, &o.user, &o.callsign, &o.lat, &o.lon, &o.acc, &o.hdg, &o.spd, &o.ts); err != nil {
+			rows.Close()
+			return err
+		}
+		olds = append(olds, o)
+	}
+	rows.Close()
+	for _, o := range olds {
+		coords, _ := json.Marshal([][2]float64{{o.lat, o.lon}})
+		meta, _ := json.Marshal(PosMeta{Source: "gps", Acc: o.acc, Hdg: o.hdg, Spd: o.spd, Fix: o.ts})
+		if _, err := tx.Exec(`INSERT INTO items (id, team_id, kind, name, coords, folder, created_by, updated_by, updated_at, meta)
+			VALUES (?, ?, 'position', ?, ?, ?, ?, ?, ?, ?)`, o.posID, o.team, o.callsign, string(coords), o.folder, o.user, o.user, o.ts, string(meta)); err != nil {
+			return fmt.Errorf("migrate position of %s: %w", o.callsign, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM positions`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // backfillFolders gives every user a personal folder and files every map

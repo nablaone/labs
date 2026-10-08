@@ -97,6 +97,11 @@ curl -fsS -H "$H" -H 'Content-Type: application/json' -X POST $SITAW_API/objects
 
 - `kind`: `waypoint` (exactly 1 point), `line` (≥ 2 points), `area` (≥ 3
   points, closed automatically; don't repeat the first point).
+- `kind: "position"` sets **your own position** (if you represent something
+  with a location, e.g. a sensor): `{"kind":"position","points":["<pos>"]}`.
+  There is one per member. Sending it again moves it, and `DELETE` means
+  "location unknown". Positions aren't listed by `/objects`; use `/positions`
+  and `/team`.
 - `points`: coordinate strings or `[lat, lon]` pairs.
 - `name` ≤ 80 chars, `remarks` ≤ 2000 chars, `color` `#rrggbb`.
 - The response is the created object; give the user its `link`.

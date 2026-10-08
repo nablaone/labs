@@ -8,11 +8,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,18 +24,41 @@ import (
 	"sitaw/web"
 )
 
+// Settings come from flags, which default to environment variables:
+//
+//	SITAW_ADDR         listen address (:8080)
+//	SITAW_DB           SQLite file (data/sitaw.db)
+//	SITAW_BASE_URL     external address clients use, e.g. https://<machine>.<tailnet>.ts.net.
+//	                   Used in invite links, agent prompts and agent instructions.
+//	                   Unset: derived from each request (fine without a proxy/tunnel).
+//	SITAW_IMPORT_JSON  pre-SQLite state file to import once (data/sitaw.json)
+//	SITAW_ADMIN_TOKEN  bearer token for /api/admin (random per run if unset)
 func main() {
-	addr := flag.String("addr", ":8080", "listen address")
-	dbPath := flag.String("db", "data/sitaw.db", "SQLite database file")
-	legacy := flag.String("import-json", "data/sitaw.json", "pre-SQLite state file, imported once as team \"default\" if the database has no teams")
-	baseURL := flag.String("base-url", "http://localhost:8080", "public URL, used to print invite links")
+	addr := flag.String("addr", env("SITAW_ADDR", ":8080"), "listen address [SITAW_ADDR]")
+	dbPath := flag.String("db", env("SITAW_DB", "data/sitaw.db"), "SQLite database file [SITAW_DB]")
+	legacy := flag.String("import-json", env("SITAW_IMPORT_JSON", "data/sitaw.json"),
+		"pre-SQLite state file, imported once as team \"default\" if the database has no teams [SITAW_IMPORT_JSON]")
+	baseURL := flag.String("base-url", env("SITAW_BASE_URL", ""),
+		"external address clients use, e.g. https://host.tailnet.ts.net; empty = derive from each request [SITAW_BASE_URL]")
 	flag.Parse()
+	*baseURL = strings.TrimRight(*baseURL, "/")
+	if *baseURL != "" && !strings.HasPrefix(*baseURL, "http://") && !strings.HasPrefix(*baseURL, "https://") {
+		fmt.Fprintf(os.Stderr, "base URL must start with http:// or https://, got %q\n", *baseURL)
+		os.Exit(2)
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(log, *addr, *dbPath, *legacy, *baseURL); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func run(log *slog.Logger, addr, dbPath, legacy, baseURL string) error {
@@ -54,6 +80,15 @@ func run(log *slog.Logger, addr, dbPath, legacy, baseURL string) error {
 	}
 	srv := server.New(st, web.Static(), adminToken, baseURL, log)
 
+	// Links printed at startup: the external address, or this machine as a hint.
+	printBase := baseURL
+	if printBase == "" {
+		_, port, _ := net.SplitHostPort(addr)
+		printBase = "http://localhost:" + port
+		log.Info("SITAW_BASE_URL not set: links use the address each client connects to; " +
+			"set it when serving through a proxy or tunnel (e.g. tailscale serve)")
+	}
+
 	if err := bootstrap(log, st, legacy); err != nil {
 		return err
 	}
@@ -69,7 +104,7 @@ func run(log *slog.Logger, addr, dbPath, legacy, baseURL string) error {
 		}
 		for _, inv := range invs {
 			if inv.Active(time.Now()) {
-				log.Info("invite", "team", t.Name, "url", srv.InviteURL(inv.Token))
+				log.Info("invite", "team", t.Name, "url", printBase+"/join?t="+inv.Token)
 			}
 		}
 	}
@@ -80,7 +115,7 @@ func run(log *slog.Logger, addr, dbPath, legacy, baseURL string) error {
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", addr, "db", dbPath)
+		log.Info("listening", "addr", addr, "db", dbPath, "external", printBase)
 		errc <- hs.ListenAndServe()
 	}()
 	select {

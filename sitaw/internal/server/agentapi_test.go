@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"sitaw/internal/store"
@@ -52,7 +54,7 @@ func TestAgentAPI(t *testing.T) {
 
 	// A human's map connection, to see agent writes arrive live.
 	human := dial(t, ts, tokBravo)
-	read(t, human, "snapshot")
+	humanSnap := read(t, human, "snapshot")
 
 	// Create an agent (session auth). The prompt carries token + skill curl.
 	code, b := do(t, ts, "POST", "/api/agents", tokProbe, "")
@@ -86,8 +88,8 @@ func TestAgentAPI(t *testing.T) {
 	}
 
 	// Reads: everything in the team, coordinates as lat/lon + MGRS.
-	write(t, human, map[string]any{"t": "pos", "pos": map[string]any{"lat": 52.2297, "lon": 21.0122, "ts": time.Now().UnixMilli()}})
-	read(t, human, "pos")
+	putPos(t, human, humanSnap.You.PositionID, 52.2297, 21.0122)
+	read(t, human, "ack")
 	write(t, human, map[string]any{"t": "put", "item": map[string]any{"id": "6f1c2c1e-0000-4000-8000-0000000000b1", "kind": "area", "name": "AO-1",
 		"coords": [][2]float64{{52.22, 21.00}, {52.22, 21.03}, {52.24, 21.03}, {52.24, 21.00}}, "updatedAt": time.Now().UnixMilli()}})
 	read(t, human, "ack")
@@ -251,5 +253,76 @@ func TestAgentRateLimitAndSkill(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte("{{")) || bytes.Contains(body, []byte(fresh.Token)) {
 		t.Fatal("unrendered template, or the token echoed back, in instructions")
+	}
+}
+
+// With SITAW_BASE_URL set, links use it, whatever Host/X-Forwarded-* say
+// (tailscale serve, for one, doesn't forward the original scheme).
+func TestExternalBaseURL(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/s.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	srv := New(st, fstest.MapFS{"index.html": {Data: []byte("<html>")}}, "admintok", "https://map.example.ts.net", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	_, inv, _ := st.CreateTeam("alpha")
+	tok, _ := join(t, ts, inv.Token, "probe")
+
+	const ext = "https://map.example.ts.net"
+	req, _ := http.NewRequest("POST", ts.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("X-Forwarded-Host", "evil.example") // must not win over the configured address
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	ag := decode[createdAgent](t, b)
+	if !strings.Contains(ag.Prompt, ext+"/agent\n") || strings.Contains(ag.Prompt, ts.URL) || strings.Contains(ag.Prompt, "evil") {
+		t.Fatalf("prompt should use %s:\n%s", ext, ag.Prompt)
+	}
+	_, body := do(t, ts, "GET", "/agent", ag.Token, "")
+	if !strings.Contains(string(body), ext+"/api/v1") {
+		t.Fatal("instructions should use the external address")
+	}
+	_, b = do(t, ts, "GET", "/api/admin/teams", "admintok", "")
+	if !strings.Contains(string(b), ext+"/join?t=") {
+		t.Fatalf("invite links should use the external address: %s", b)
+	}
+}
+
+// An agent can report its own position (e.g. a sensor); it shows in /positions.
+func TestAgentPosition(t *testing.T) {
+	ts, _, invite := setup(t)
+	tok, _ := join(t, ts, invite, "probe")
+	_, b := do(t, ts, "POST", "/api/agents", tok, "")
+	ag := decode[createdAgent](t, b)
+
+	code, b := do(t, ts, "POST", "/api/v1/objects", ag.Token, `{"kind":"position","points":["34U DC 99000 86000"]}`)
+	if code != http.StatusCreated {
+		t.Fatalf("set position: %d %s", code, b)
+	}
+	pos := decode[map[string]any](t, b)
+	_, b = do(t, ts, "GET", "/api/v1/positions", ag.Token, "")
+	ps := decode[[]map[string]any](t, b)
+	if len(ps) != 1 || ps[0]["callsign"] != "PROBE-ALPHA" || !strings.HasPrefix(ps[0]["mgrs"].(string), "34U DC 99000 86000") {
+		t.Fatalf("positions: %s", b)
+	}
+	// Setting it again moves the same object; it isn't listed among drawn objects.
+	if code, b := do(t, ts, "POST", "/api/v1/objects", ag.Token, `{"kind":"position","points":["52.1, 21.1"]}`); code != http.StatusCreated ||
+		decode[map[string]any](t, b)["id"] != pos["id"] {
+		t.Fatalf("move position: %d %s", code, b)
+	}
+	if _, b := do(t, ts, "GET", "/api/v1/objects", ag.Token, ""); len(decode[[]map[string]any](t, b)) != 0 {
+		t.Fatalf("position listed as an object: %s", b)
+	}
+	// Location unknown: delete it.
+	if code, _ := do(t, ts, "DELETE", "/api/v1/objects/"+pos["id"].(string), ag.Token, ""); code != http.StatusNoContent {
+		t.Fatalf("delete position: %d", code)
+	}
+	if _, b := do(t, ts, "GET", "/api/v1/positions", ag.Token, ""); len(decode[[]map[string]any](t, b)) != 0 {
+		t.Fatalf("position not removed: %s", b)
 	}
 }

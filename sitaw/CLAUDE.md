@@ -164,7 +164,7 @@ docs/FEATURES.md         ATAK-CIV feature map and sitaw status
 
 - The WebSocket protocol is documented at the top of `internal/server/ws.go`.
   Client and server must agree on it, so change both together.
-- Items are `waypoint | line | area | folder`, with coords as `[lat, lon]` pairs. A delete is a
+- Items are `waypoint | line | area | folder | position`, with coords as `[lat, lon]` pairs. A delete is a
   **tombstone** (`deleted: true`), never a removal, so offline peers converge.
 - Conflicts are last-write-wins on `(updatedAt, updatedBy)`. The same comparison
   exists in `store.PutItem` and `newer()` in `sync.js`, and the two must match.
@@ -173,7 +173,19 @@ docs/FEATURES.md         ATAK-CIV feature map and sitaw status
   client can clear its outbox entry even when the server clamped the timestamp.
 - The server overwrites identity fields (`userId`, `callsign`, `createdBy`,
   `updatedBy`). Never trust them from the client.
-- Positions: only the latest fix per user is kept, and fixes are not queued while offline.
+- **Positions are objects** (`kind: "position"`, since v4). Each user and agent has
+  exactly one, at the fixed id `users.position_id` (`positionId` in the roster), in
+  their personal folder, with `pos: {source: gps|manual, acc, hdg, spd, fix}`
+  (`items.meta`). Only its own user may write it (`PutItem` → `ErrForbidden`),
+  and nobody may reuse the id for another kind. Deleting it means "location unknown".
+  GPS updates are ordinary puts (throttled in `sendFix`), so offline fixes queue
+  in the outbox, and only the latest is kept per id.
+  - Per device, `prefs.posMode` is `gps` | `manual` | `off`. Manual placement
+    ("Set at crosshair") sticks until USE GPS. Unknown deletes the object.
+  - Positions don't follow folder visibility: the team layer (View → TEAM)
+    shows everyone's. Your own drives the self marker, whichever of your devices wrote it.
+  - The old `positions` table and `pos` messages are gone; `migrate.go` converts the
+    old rows. `store.Positions()` derives the list from the objects (agent API).
 
 ## Auth
 
@@ -200,12 +212,22 @@ docs/FEATURES.md         ATAK-CIV feature map and sitaw status
   On startup with an empty database, the server imports `data/sitaw.json` (if
   present) or creates team "default". It always logs every team's active invite links.
 
+## Configuration
+
+Settings are flags that default to env vars (`SITAW_ADDR`, `SITAW_DB`, `SITAW_BASE_URL`,
+`SITAW_IMPORT_JSON`, `SITAW_ADMIN_TOKEN`); see the comment on `main`.
+`SITAW_BASE_URL` is the external address. When set, it wins everywhere
+(`Server.publicURL`): invite links, agent prompts, agent instructions. When unset,
+the address is derived from each request (X-Forwarded-Proto/Host, else Host).
+That isn't enough behind `tailscale serve`, which doesn't forward the scheme.
+
 ## Commands
 
 ```sh
 go test -race ./...                       # store, geo (vs JS vectors), team isolation, agent API, WebSocket e2e
 node --test web/test/                     # JS unit tests (coords, MGRS); web/package.json only sets "type": "module"
-go run ./cmd/sitaw -addr :8080            # http://localhost:8080, invite URL is in the log
+go run ./cmd/sitaw                        # http://localhost:8080, invite URL is in the log
+SITAW_BASE_URL=https://host.tailnet.ts.net go run ./cmd/sitaw   # behind a proxy/tunnel
 go vet ./... && gofmt -l .
 ```
 

@@ -101,7 +101,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request, u sto
 }
 
 func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request, u store.User) {
-	pub, err := s.store.RevokeAgent(u.ID, r.PathValue("id"))
+	pub, gone, err := s.store.RevokeAgent(u.ID, r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such agent of yours")
 		return
@@ -112,6 +112,9 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request, u sto
 	}
 	s.hub.kick(pub.ID)
 	s.hub.broadcast(u.TeamID, msg{T: "user", User: &pub})
+	for i := range gone {
+		s.hub.broadcast(u.TeamID, msg{T: "item", Item: &gone[i]})
+	}
 	s.log.Info("agent revoked", "agent", pub.Callsign, "owner", u.Callsign)
 	w.WriteHeader(http.StatusNoContent)
 }

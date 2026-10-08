@@ -19,13 +19,14 @@ import (
 //
 // client -> server
 //
-//	{"t":"pos",  "pos": {lat, lon, acc, hdg, spd, ts}}
 //	{"t":"put",  "item": Item}            upsert, or tombstone with deleted:true
+//
+// Positions are items too (kind "position", one per user at user.positionId,
+// with "pos" metadata), so GPS updates are ordinary puts.
 //
 // server -> client
 //
-//	{"t":"snapshot", "now": ms, "you": User, "team": Team, "users": [...], "items": [...], "positions": [...]}
-//	{"t":"pos",   "pos": Position}
+//	{"t":"snapshot", "now": ms, "you": User, "team": Team, "users": [...], "items": [...]}
 //	{"t":"item",  "item": Item}
 //	{"t":"leave", "userId": "..."}       user was removed; drop their marker
 //	{"t":"user",  "user": PublicUser}    someone joined the team
@@ -35,21 +36,19 @@ import (
 // the client's updatedAt for outbox bookkeeping. "now" in the snapshot lets
 // clients correct their clock offset before stamping edits.
 type msg struct {
-	T         string             `json:"t"`
-	Pos       *store.Position    `json:"pos,omitempty"`
-	Item      *store.Item        `json:"item,omitempty"`
-	ID        string             `json:"id,omitempty"`
-	OK        *bool              `json:"ok,omitempty"`
-	Error     string             `json:"error,omitempty"`
-	You       *store.PublicUser  `json:"you,omitempty"`
-	Team      *store.Team        `json:"team,omitempty"`
-	Users     []store.PublicUser `json:"users,omitempty"`
-	Items     []store.Item       `json:"items,omitempty"`
-	Positions []store.Position   `json:"positions,omitempty"`
-	SentAt    int64              `json:"sentAt,omitempty"`
-	Now       int64              `json:"now,omitempty"`
-	UserID    string             `json:"userId,omitempty"`
-	User      *store.PublicUser  `json:"user,omitempty"`
+	T      string             `json:"t"`
+	Item   *store.Item        `json:"item,omitempty"`
+	ID     string             `json:"id,omitempty"`
+	OK     *bool              `json:"ok,omitempty"`
+	Error  string             `json:"error,omitempty"`
+	You    *store.PublicUser  `json:"you,omitempty"`
+	Team   *store.Team        `json:"team,omitempty"`
+	Users  []store.PublicUser `json:"users,omitempty"`
+	Items  []store.Item       `json:"items,omitempty"`
+	SentAt int64              `json:"sentAt,omitempty"`
+	Now    int64              `json:"now,omitempty"`
+	UserID string             `json:"userId,omitempty"`
+	User   *store.PublicUser  `json:"user,omitempty"`
 }
 
 // Client clocks may be off; never let an edit claim to be from the far future,
@@ -142,14 +141,10 @@ func (s *Server) snapshot(u store.User) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	positions, err := s.store.Positions(u.TeamID)
-	if err != nil {
-		return nil, err
-	}
 	pub := u.Public()
 	return json.Marshal(msg{
 		T: "snapshot", Now: time.Now().UnixMilli(), You: &pub, Team: &team,
-		Users: users, Items: items, Positions: positions,
+		Users: users, Items: items,
 	})
 }
 
@@ -233,24 +228,6 @@ func (s *Server) handleMsg(c *client, m msg) {
 	now := time.Now()
 	team := c.user.TeamID
 	switch m.T {
-	case "pos":
-		p := m.Pos
-		if p == nil || !validLatLon(p.Lat, p.Lon) {
-			return
-		}
-		p.UserID, p.Callsign = c.user.ID, c.user.Callsign
-		if p.TS <= 0 || p.TS > now.Add(maxClockSkew).UnixMilli() {
-			p.TS = now.UnixMilli()
-		}
-		stored, err := s.store.SetPosition(c.user, *p)
-		if err != nil {
-			s.log.Error("set position", "err", err)
-			return
-		}
-		if stored {
-			s.hub.broadcast(team, msg{T: "pos", Pos: p})
-		}
-
 	case "put":
 		it := m.Item
 		if it == nil {
@@ -264,9 +241,21 @@ func (s *Server) handleMsg(c *client, m msg) {
 		if it.UpdatedAt > now.Add(maxClockSkew).UnixMilli() {
 			it.UpdatedAt = now.UnixMilli()
 		}
+		if it.Pos != nil && (it.Pos.Fix <= 0 || it.Pos.Fix > now.Add(maxClockSkew).UnixMilli()) {
+			it.Pos.Fix = now.UnixMilli()
+		}
 		stored, applied, err := s.store.PutItem(team, *it, c.user)
 		if errors.Is(err, store.ErrForeignItem) {
 			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: "id in use"})
+			return
+		}
+		if errors.Is(err, store.ErrForbidden) {
+			// e.g. someone else's position, or an agent outside its folder.
+			ack := msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), SentAt: sentAt}
+			if stored.ID != "" {
+				ack.Item = &stored // the client puts the server copy back
+			}
+			s.reply(c, ack)
 			return
 		}
 		if errors.Is(err, store.ErrFolderInUse) {
