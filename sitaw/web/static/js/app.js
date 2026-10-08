@@ -2,8 +2,9 @@
 //
 // UI layout: everything floats over the map. Round buttons in the top-right
 // (View, Go to, Objects, Draw) open popovers to their left; the bottom-left
-// corner shows callsign, center MGRS, GPS and server status. Forms use a
-// bottom sheet. Objects live in flat folders (one personal folder per user).
+// corner shows callsign, center MGRS, GPS and server status. Details and forms
+// open in a panel in the same place as the menus. Objects live in flat folders
+// (one personal folder per user).
 
 import { Sync } from './sync.js';
 import { ItemsLayer, TeamLayer, SelfMarker, DEFAULT_COLORS, lineLength, polygonArea } from './layers.js';
@@ -84,7 +85,7 @@ async function showJoin(invite, session) {
 // are shown, and where new objects go. Folder visibility is stored only once
 // the user toggles it; until then folderVisible() picks the default.
 function loadPrefs() {
-  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, folded: {}, night: false };
+  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, night: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY));
     if (!p) return def;
@@ -93,7 +94,6 @@ function loadPrefs() {
       show: { grid: p.show?.grid ?? true, team: p.show?.team ?? true },
       folders: p.folders ?? {},
       drawFolder: p.drawFolder ?? null,
-      folded: p.folded ?? {},
       night: !!p.night,
     };
   } catch {
@@ -191,7 +191,7 @@ function startApp(session) {
     else if (it.kind === 'line') L.polyline(it.coords, { ...style, weight: 14 }).addTo(selection);
     else L.polygon(it.coords, { ...style, weight: 12, fill: false }).addTo(selection);
   }
-  const team = new TeamLayer(map, me.id, (uid) => { closePops(); openUser(uid, false); });
+  const team = new TeamLayer(map, me.id, (uid) => openFrom(null, () => openUser(uid, false)));
   const self = new SelfMarker(map);
   const grid = new MgrsGrid();
 
@@ -349,8 +349,16 @@ function startApp(session) {
   let openPop = null;
   function closePops() {
     for (const p of document.querySelectorAll('.pop')) p.hidden = true;
-    for (const b of document.querySelectorAll('[data-fab]')) b.classList.toggle('active', b.dataset.fab === 'draw' && draw.active);
     openPop = null;
+    markTiles();
+  }
+  // A tile is lit while its menu, or a panel opened from it, is showing.
+  function markTiles() {
+    const panel = !$('#sheet').hidden && panelFrom;
+    for (const b of document.querySelectorAll('[data-fab]')) {
+      const f = b.dataset.fab;
+      b.classList.toggle('active', (f === 'draw' && draw.active) || f === openPop || f === panel);
+    }
   }
   function togglePop(name) {
     const was = openPop;
@@ -364,7 +372,7 @@ function startApp(session) {
     if (name === 'goto') renderGoto(pop);
     if (name === 'objects') renderObjects(pop);
     pop.hidden = false;
-    $(`[data-fab="${name}"]`).classList.add('active');
+    markTiles();
   }
   $('#fab').addEventListener('click', (e) => {
     const fab = e.target.closest('[data-fab]')?.dataset.fab;
@@ -403,9 +411,7 @@ function startApp(session) {
       <div class="chips">
         ${folders.map((f) => chip('data-folder', f.id, folderVisible(f.id) ? 'eye' : 'eyeOff', f.name, folderVisible(f.id),
           ` <span class="count">${objectsIn(f.id).length}</span>`)).join('') || '<div class="empty">No folders yet</div>'}
-      </div>
-      <h4>${esc(me.callsign)} · ${esc(session.team?.name ?? 'team')}</h4>
-      <button class="prow" data-act="leave">${icon('logout')}<span class="name">Leave team…</span></button>`;
+      </div>`;
     pop.onclick = (e) => {
       const t = e.target;
       const base = t.closest('[data-base]')?.dataset.base;
@@ -419,7 +425,7 @@ function startApp(session) {
       else if (vis) {
         for (const f of folders) prefs.folders[f.id] = vis === 'all' || f.id === myFolder();
         setFolderVisible(myFolder(), true);
-      } else if (t.closest('[data-act="leave"]')) { closePops(); confirmLeave(); return; }
+      }
       else return;
       renderView(pop);
     };
@@ -520,27 +526,33 @@ function startApp(session) {
     <span class="name">${esc(i.name || KIND_LABEL[i.kind])}</span>
     <span class="meta">${showFolder ? `${esc(folderName(folderOf(i)))} · ` : ''}${esc(meta)}</span></button>`;
 
-  // Objects: every folder with its objects. Picking an object opens its details.
-  // Folding a folder hides its contents in this list (not on the map; that's
-  // View). Remembered per device; by default only your own folder is unfolded.
-  const isFolded = (fid) => prefs.folded[fid] ?? fid !== myFolder();
-  const setFolded = (fid, on) => { prefs.folded[fid] = on; savePrefs(prefs); };
+  // The current folder is where new objects go. It is the only unfolded one
+  // in the Objects menu; unfolding another folder makes that one current.
+  function setCurrentFolder(fid) {
+    if (fid === drawTarget()) return;
+    prefs.drawFolder = fid;
+    savePrefs(prefs);
+    if (!folderVisible(fid)) setFolderVisible(fid, true); // you work where you can see
+    toast(`New objects go to ${folderName(fid)}`);
+  }
+
+  // Objects: folders as an accordion. Only the current folder is unfolded.
+  // Tapping an object flies to it (menu stays open); ⓘ opens its details.
   function renderObjects(pop) {
     const target = drawTarget();
     const folders = allFolders();
-    const anyOpen = folders.some((f) => !isFolded(f.id));
     const scroll = pop.scrollTop; // keep the place while browsing when data changes
     pop.innerHTML = `
       <div class="pop-actions">
         <button class="chip" data-act="new-folder">${icon('folderPlus')}New folder</button>
-        ${folders.length > 1 ? `<button class="chip" data-act="${anyOpen ? 'fold-all' : 'unfold-all'}">${icon('chevron')}${anyOpen ? 'Fold all' : 'Unfold all'}</button>` : ''}
       </div>
       ${folders.map((f) => {
         const objs = objectsIn(f.id).sort((a, b) => b.updatedAt - a.updatedAt);
-        const open = !isFolded(f.id);
+        const open = f.id === target;
         const owner = personalOwner(f.id);
         return `<div class="frow">
-            <button class="prow${folderVisible(f.id) ? '' : ' dim'}" data-toggle="${esc(f.id)}" aria-expanded="${open}">
+            <button class="prow folder-head${open ? ' current' : ''}${folderVisible(f.id) ? '' : ' dim'}" data-toggle="${esc(f.id)}" aria-expanded="${open}"
+              title="${open ? 'Current folder: new objects go here' : 'Make current'}">
               <span class="chev${open ? ' open' : ''}">${icon('chevron')}</span>${icon(folderVisible(f.id) ? 'folder' : 'eyeOff')}
               <span class="name">${esc(f.name)}</span>
               ${owner ? `<span class="tag" title="Personal folder">${icon('user')}</span>` : ''}
@@ -561,17 +573,11 @@ function startApp(session) {
       const i = t.closest('[data-item]')?.dataset.item;
       const details = t.closest('[data-details]')?.dataset.details;
       if (tog) {
-        setFolded(tog, !isFolded(tog));
+        setCurrentFolder(tog);
         renderObjects(pop);
-      } else if (menu) { closePops(); openItem(menu, false); }
-      else if (t.closest('[data-act="new-folder"]')) { closePops(); newFolder(); }
-      else if (t.closest('[data-act="fold-all"], [data-act="unfold-all"]')) {
-        const fold = !!t.closest('[data-act="fold-all"]');
-        for (const f of folders) prefs.folded[f.id] = fold;
-        savePrefs(prefs);
-        renderObjects(pop);
-      }
-      else if (details) { closePops(); openItem(details, false); }
+      } else if (menu) openFrom('objects', () => openItem(menu, false));
+      else if (t.closest('[data-act="new-folder"]')) openFrom('objects', newFolder);
+      else if (details) openFrom('objects', () => openItem(details, false));
       else if (i) {
         // Fly to it and keep the menu open, so you can step through objects.
         setFollow(false);
@@ -650,8 +656,7 @@ function startApp(session) {
       draw.add(it?.kind === 'waypoint' ? L.latLng(it.coords[0]) : latlng);
       return;
     }
-    closePops();
-    openItem(id, false);
+    openFrom(null, () => openItem(id, false));
   }
 
   // ----- links: every object has a URL (/i/<item id>, /u/<user id>) -----
@@ -674,6 +679,7 @@ function startApp(session) {
     const found = r.kind === 'item' ? live(sync.items.get(r.id)) : sync.users.has(r.id) || sync.positions.has(r.id);
     if (found) {
       pendingRoute = null;
+      panelFrom = null;
       if (r.kind === 'item') {
         const it = sync.items.get(r.id);
         const fid = isFolder(it) ? it.id : folderOf(it);
@@ -726,19 +732,45 @@ function startApp(session) {
     }
   }
 
-  // ----- bottom sheet -----
+  // ----- panel (details, forms) -----
+  // Opens in the same place as the menus, next to the tile column, to keep the
+  // map free. A panel opened from a menu shows "‹ <menu>" to go back to it.
+  const FAB_LABEL = { view: 'View', goto: 'Go to', objects: 'Obj' };
+  let panelFrom = null; // menu the current panel was opened from, or null (map tap, link)
+  function openFrom(menu, fn) {
+    closePops();
+    panelFrom = menu;
+    fn();
+  }
   function openSheet(html) {
     const s = $('#sheet');
-    $('.sheet-body', s).innerHTML = `<button class="sheet-x" data-sheet-close aria-label="Close">${icon('x')}</button>${html}`;
+    const back = panelFrom
+      ? `<button class="sheet-back" data-sheet-back>${icon('chevronLeft')}${esc(FAB_LABEL[panelFrom])}</button>` : '<span></span>';
+    $('.sheet-body', s).innerHTML = `<div class="sheet-bar">${back}
+      <button class="sheet-x" data-sheet-close aria-label="Close">${icon('x')}</button></div>${html}`;
+    // Line up with the tile it belongs to (or the top of the column).
+    const top = (panelFrom ? $(`[data-fab="${panelFrom}"]`) : $('#fab')).getBoundingClientRect().top;
+    s.style.top = `${top}px`;
+    s.style.maxHeight = `calc(100% - ${top}px - 110px - var(--safe-b))`;
     s.hidden = false;
     s.scrollTop = 0;
+    markTiles();
     return s;
   }
-  $('#sheet').addEventListener('click', (e) => { if (e.target.closest('[data-sheet-close]')) closeSheet(); });
+  $('#sheet').addEventListener('click', (e) => {
+    if (e.target.closest('[data-sheet-close]')) closeSheet();
+    else if (e.target.closest('[data-sheet-back]')) {
+      const menu = panelFrom;
+      closeSheet();
+      togglePop(menu);
+    }
+  });
   function hideSheet() {
     $('#sheet').hidden = true;
+    panelFrom = null;
+    markTiles();
   }
-  // Closing the sheet deselects: the URL goes back to the plain map.
+  // Closing the panel deselects: the URL goes back to the plain map.
   function closeSheet() {
     hideSheet();
     select(null);
@@ -853,7 +885,7 @@ function startApp(session) {
     else if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 16 });
   }
 
-  // ----- folder sheets -----
+  // ----- folder panels -----
   function showFolder(fid) {
     const f = sync.items.get(fid);
     if (!live(f)) return;
@@ -865,10 +897,10 @@ function startApp(session) {
     const s = openSheet(`
       <h2>${icon('folder')} ${esc(f.name)}</h2>
       <div class="sub">${owner ? `Personal folder of ${esc(owner.callsign)}` : `Shared folder · created by ${esc(author(f.createdBy))}`}</div>
-      <div class="sub">${objs.length} object${objs.length === 1 ? '' : 's'} · ${vis ? 'shown' : 'hidden'} on map${isTarget ? ' · new objects go here' : ''}</div>
+      <div class="sub">${objs.length} object${objs.length === 1 ? '' : 's'} · ${vis ? 'shown' : 'hidden'} on map${isTarget ? ' · current (new objects go here)' : ''}</div>
       <div class="row actions">
         <button class="btn" data-a="vis">${vis ? 'Hide' : 'Show'}</button>
-        ${isTarget ? '' : '<button class="btn" data-a="target">New objects here</button>'}
+        ${isTarget ? '' : '<button class="btn" data-a="target">Make current</button>'}
         ${owner ? '' : '<button class="btn" data-a="rename">Rename</button>'}
         <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
         ${canDelete ? '<button class="btn danger" data-a="del">Delete</button>' : ''}
@@ -877,13 +909,8 @@ function startApp(session) {
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'vis') { setFolderVisible(fid, !vis); showFolder(fid); }
-      else if (a === 'target') {
-        prefs.drawFolder = fid;
-        savePrefs(prefs);
-        if (!vis) setFolderVisible(fid, true);
-        toast(`New objects go to ${f.name}`);
-        showFolder(fid);
-      } else if (a === 'rename') folderForm(fid);
+      else if (a === 'target') { setCurrentFolder(fid); showFolder(fid); }
+      else if (a === 'rename') folderForm(fid);
       else if (a === 'link') copyLink();
       else if (a === 'del') confirmDelete(fid);
     };
@@ -896,7 +923,7 @@ function startApp(session) {
       <h2>${f ? 'Rename folder' : 'New folder'}</h2>
       <label for="f-fname">Name</label>
       <input id="f-fname" maxlength="80" value="${esc(f?.name ?? '')}" placeholder="e.g. Recon day 2">
-      ${f ? '' : '<label><input type="checkbox" id="f-target" checked style="width:auto;min-height:0"> Put my new objects here</label>'}
+      ${f ? '' : '<label><input type="checkbox" id="f-target" checked style="width:auto;min-height:0"> Make it the current folder</label>'}
       <div class="row actions">
         <button class="btn" data-a="cancel">Cancel</button>
         <button class="btn primary" data-a="save">${f ? 'Save' : 'Create'}</button>
@@ -944,22 +971,6 @@ function startApp(session) {
       if (a === 'zoom') { hideSheet(); setFollow(false); map.setView([p.lat, p.lon], Math.max(map.getZoom(), 15)); }
       else if (a === 'link') copyLink();
       else if (a === 'folder') openItem(fid, false);
-    };
-  }
-
-  function confirmLeave() {
-    const n = sync.pendingCount;
-    const s = openSheet(`
-      <h2>Leave this team?</h2>
-      <p>All local data is removed from this device${n ? `, including <b>${n} change(s) not yet sent</b>` : ''}. You will need a new invite link to come back.</p>
-      <div class="row actions">
-        <button class="btn" data-a="no">Cancel</button>
-        <button class="btn danger" data-a="yes">Leave</button>
-      </div>`);
-    s.onclick = (e) => {
-      const a = e.target.closest('[data-a]')?.dataset.a;
-      if (a === 'yes') leave();
-      else if (a === 'no') closeSheet();
     };
   }
 }

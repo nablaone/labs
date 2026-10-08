@@ -122,7 +122,7 @@ implemented but have not been tested by hand in a browser yet.
 | Import Manager (KML, KMZ, GPX, GeoJSON) | Next | [ ] | GeoJSON first |
 | Export (KML, GPX, GeoJSON) | Next | [ ] | |
 | Hashtags and sticky tags | Later | [ ] | |
-| Clear Content (wipe local data) | MVP | [x] | "Leave" in settings clears local storage |
+| Clear Content (wipe local data) | Later | [~] | No user-facing button; local data is wiped automatically when a removed user's session is rejected, or when joining another team |
 | Encryption at rest | No | | Use HTTPS; the browser storage is the device's concern |
 
 ## 9. Network and server (what replaces the TAK Server)

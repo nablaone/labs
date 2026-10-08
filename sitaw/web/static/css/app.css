@@ -149,6 +149,8 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 .prow .tag .i { width: 18px; height: 18px; }
 .prow .chev { color: inherit; }
 .prow .chev.open { transform: rotate(90deg); }
+/* the one unfolded folder = current folder for new objects */
+.prow.folder-head.current { box-shadow: inset 6px 0 0 var(--ink); }
 .frow { display: flex; align-items: stretch; }
 .frow .prow { flex: 1; min-width: 0; }
 .frow .mini { flex: none; width: 48px; border: 0; border-bottom: 1px solid var(--hair); border-left: 1px solid var(--hair);
@@ -197,19 +199,27 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 .leaflet-control-scale-line { border: var(--line) solid var(--rule); border-top: 0; background: var(--paper); color: var(--ink);
   font-weight: 700; font-size: 11px; text-shadow: none; }
 
-/* --- bottom sheet --- */
-#sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 1100; max-height: 75vh; overflow: auto;
-  background: var(--paper); color: var(--ink); border-top: var(--line) solid var(--rule);
-  padding: 0 12px calc(12px + var(--safe-b)); }
-.sheet-x { position: sticky; top: 0; float: right; margin: 0 -12px 0 8px; width: var(--tap); height: var(--tap);
-  border: 0; border-left: var(--line) solid var(--rule); border-bottom: var(--line) solid var(--rule);
-  background: var(--paper); color: var(--ink); display: grid; place-items: center; cursor: pointer; z-index: 1; }
-.sheet-x:active { background: var(--ink); color: var(--paper); }
-#sheet h2 { margin: 12px 0 6px; font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
+/* --- panel (details, forms): opens where the menus do, left of the tiles --- */
+#sheet { position: absolute; z-index: 1100; top: calc(8px + var(--safe-t)); right: calc(8px + 60px + 6px + var(--safe-r));
+  width: min(320px, calc(100vw - 88px)); overflow: auto;
+  background: var(--paper); color: var(--ink); border: var(--line) solid var(--rule); padding: 0 10px 10px; }
+.sheet-bar { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: stretch;
+  margin: 0 -10px; background: var(--paper); border-bottom: var(--line) solid var(--rule); }
+.sheet-x, .sheet-back { min-height: 48px; border: 0; background: var(--paper); color: var(--ink); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; }
+.sheet-x { width: 52px; border-left: var(--line) solid var(--rule); }
+.sheet-back { gap: 2px; padding: 0 12px 0 6px; border-right: var(--line) solid var(--rule);
+  font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.sheet-x:active, .sheet-back:active { background: var(--ink); color: var(--paper); }
+#sheet h2 { margin: 10px 0 6px; font-size: 18px; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
 #sheet h2 .i { display: inline-block; vertical-align: -4px; }
-#sheet .sub { color: var(--ink); font-size: 14px; }
+#sheet .sub { color: var(--ink); font-size: 13px; }
 #sheet p { margin: 10px 0; }
-#sheet .actions { margin-top: 14px; clear: both; }
+/* actions stay reachable at the bottom of long panels (edit form) */
+#sheet .actions { position: sticky; bottom: -10px; margin: 12px -10px -10px; padding: 8px 10px 10px;
+  background: var(--paper); border-top: var(--line) solid var(--rule); }
+#sheet .row { gap: 6px; }
+#sheet .btn { padding: 0 8px; font-size: 13px; min-width: 52px; }
 .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
 .swatch { width: 48px; height: 48px; border: var(--line) solid var(--rule); cursor: pointer; }
 .swatch.sel { outline: 4px solid var(--ink); outline-offset: 2px; }

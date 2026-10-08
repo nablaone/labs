@@ -38,18 +38,24 @@ ship something.
   - Objects: folders with their objects, for browsing. Tapping an object flies
     to it and highlights it (yellow outline plus the selected row) while the menu
     **stays open**, so you can step through objects. It does **not** open the
-    details sheet; the ⓘ on each row does that. `focusItem` frames the object in
+    details panel; the ⓘ on each row does that. `focusItem` frames the object in
     the map area below the menu.
-    Folders fold and unfold here (tap the row, or Fold all / Unfold all). Folding
-    only hides the list contents, not the map objects (that's View). The fold
-    state is a per-device pref (`folded`); by default only your own folder is unfolded. Forms use a bottom sheet, never
-  `alert`/`confirm`. Icons are inline SVG in `js/icons.js`, so they work offline.
+    The folders form an accordion: exactly one is unfolded, and it is the **current
+    folder**, where new objects go (`prefs.drawFolder`, default: your personal
+    folder; `setCurrentFolder`). Tapping another folder makes it current, which
+    unfolds it and folds the previous one. The list only; map visibility is View.
+  - Details and forms open in a **panel in the same place as the menus**
+    (`#sheet`, `openSheet`), aligned with the tile it came from. A panel opened from a
+    menu (`openFrom('objects', …)`) has a "‹ OBJ" back button; one opened from a
+    map tap or link does not. Its action row is sticky at the bottom. There is no
+    bottom sheet and no `alert`/`confirm`.
+  Icons are inline SVG in `js/icons.js`, so they work offline.
   Touch targets are at least 48 px, main buttons 56 px (`--tap`).
 - **Offline**: the PWA shell is network-first (3 s timeout) with a cache fallback, tiles are
   cache-first (capped), and item edits go to an IndexedDB outbox that is
   replayed on reconnect.
 - **Links**: every object has a URL: `/i/<item uuid>` and `/u/<user id>`.
-  Selecting an object pushes the URL; closing the sheet goes back to `/`. A link
+  Selecting an object pushes the URL; closing the panel goes back to `/`. A link
   carries only the id. The object comes from the team's own replica, so a
   non-member gets the "members only" screen and a member of another team gets
   "not part of your team". The local IndexedDB cache is stamped with its team
@@ -70,7 +76,8 @@ Follow them for anything new:
 - Main controls are square tiles with an icon **and** a text label (VIEW / GO TO /
   OBJ / DRAW; the draw fan and drawing controls are labelled too), joined into
   stacks with shared borders.
-- Every sheet has an explicit ✕ close button (`.sheet-x`, added by `openSheet`).
+- Every panel has a header bar with an explicit ✕ close (`.sheet-x`), plus
+  "‹ <menu>" back (`.sheet-back`) when opened from a menu, both added by `openSheet`.
 - Colors only come from the CSS tokens. **Night mode** (`html[data-night]`,
   toggled in View, stored in prefs, applied pre-paint by an inline script in
   index.html) swaps the tokens to red-on-black, and runs the map tiles through
@@ -88,7 +95,7 @@ web/embed.go             embeds web/static
 web/static/
   index.html, css/app.css
   sw.js                  service worker (bump VERSION when the SHELL list changes)
-  js/app.js              boot, auth/join, UI wiring, sheets, GPS
+  js/app.js              boot, auth/join, UI wiring, menus and panels, GPS
   js/sync.js             WebSocket client, local replica, outbox, LWW
   js/db.js               IndexedDB kv/items/outbox
   js/layers.js           item, team and self rendering, length/area helpers
