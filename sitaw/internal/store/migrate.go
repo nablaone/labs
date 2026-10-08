@@ -19,6 +19,16 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS items_folder ON items(folder)`); err != nil {
 		return err
 	}
+	// v3: agents (sub-users owned by a user).
+	for _, c := range [][2]string{
+		{"owner_id", "TEXT NOT NULL DEFAULT ''"},
+		{"revoked", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_used_at", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumn(s.db, "users", c[0], c[1]); err != nil {
+			return err
+		}
+	}
 	return s.backfillFolders()
 }
 

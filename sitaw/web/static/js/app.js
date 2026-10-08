@@ -163,8 +163,10 @@ function startApp(session) {
     return sync.users.get(it.createdBy)?.folderId ?? it.folder ?? '';
   };
   const folderName = (fid) => sync.items.get(fid)?.name ?? 'Unknown folder';
-  // By default you see your own objects only: your folder and folders you made.
-  const folderVisible = (fid) => prefs.folders[fid] ?? (fid === myFolder() || sync.items.get(fid)?.createdBy === me.id);
+  // By default you see your own objects only: your folder, folders you made,
+  // and the folders of your agents.
+  const folderVisible = (fid) => prefs.folders[fid] ??
+    (fid === myFolder() || sync.items.get(fid)?.createdBy === me.id || personalOwner(fid)?.ownerId === me.id);
   const setFolderVisible = (fid, on) => {
     prefs.folders[fid] = on;
     savePrefs(prefs);
@@ -240,6 +242,7 @@ function startApp(session) {
   const refreshPop = () => {
     if (openPop === 'objects') renderObjects($('[data-pop="objects"] .pop-body'));
     if (openPop === 'view') renderView($('[data-pop="view"] .pop-body'));
+    if (openPop === 'agents') renderAgents($('[data-pop="agents"] .pop-body'));
   };
   sync.addEventListener('status', updateServer);
   sync.addEventListener('reset', (e) => {
@@ -370,6 +373,7 @@ function startApp(session) {
     if (name === 'view') renderView(body);
     if (name === 'goto') renderGoto(body);
     if (name === 'objects') renderObjects(body);
+    if (name === 'agents') renderAgents(body);
     if (name === 'draw') $('.draw-into', pop).textContent = `New objects go to ${folderName(drawTarget())}`;
     pop.hidden = false;
     body.scrollTop = 0;
@@ -559,7 +563,7 @@ function startApp(session) {
               title="${open ? 'Current folder: new objects go here' : 'Make current'}">
               <span class="chev${open ? ' open' : ''}">${icon('chevron')}</span>${icon(folderVisible(f.id) ? 'folder' : 'eyeOff')}
               <span class="name">${esc(f.name)}</span>
-              ${owner ? `<span class="tag" title="Personal folder">${icon('user')}</span>` : ''}
+              ${owner ? `<span class="tag" title="${owner.ownerId ? 'Agent folder' : 'Personal folder'}">${icon(owner.ownerId ? 'robot' : 'user')}</span>` : ''}
               ${f.id === target ? `<span class="tag" title="New objects go here">${icon('star')}</span>` : ''}
               <span class="meta">${objs.length}</span>
             </button>
@@ -611,6 +615,94 @@ function startApp(session) {
       paddingTopLeft: [24, top], paddingBottomRight: [80, 90],
       maxZoom: it.kind === 'waypoint' ? Math.max(map.getZoom(), 15) : 17,
     });
+  }
+
+  // ----- agents -----
+  // Your AI agents: sub-users named <YOU>-<NATO>, each with its own folder.
+  // They read all team data and write only in their folder (server-enforced).
+  async function api(method, path) {
+    const r = await fetch(path, { method, headers: { Authorization: `Bearer ${session.token}` } });
+    const body = r.status === 204 ? null : await r.json().catch(() => null);
+    if (!r.ok) throw new Error(body?.error ?? r.statusText);
+    return body;
+  }
+
+  async function renderAgents(body) {
+    body.innerHTML = `
+      <div class="pop-actions"><button class="chip on" data-act="connect">${icon('robot')}Connect an agent</button></div>
+      <div class="agent-list"><div class="empty">Loading…</div></div>
+      <p class="empty">An agent reads all team data and can only change objects in its own folder.
+        It appears on the team as <b>${esc(me.callsign.toUpperCase())}-ALPHA</b>, <b>-BRAVO</b>, …</p>`;
+    body.onclick = async (e) => {
+      const t = e.target;
+      if (t.closest('[data-act="connect"]')) { connectAgent(); return; }
+      const rev = t.closest('[data-revoke]')?.dataset.revoke;
+      if (rev) openFrom('agents', () => confirmRevoke(rev, t.closest('[data-revoke]').dataset.name));
+    };
+    if (!navigator.onLine) { $('.agent-list', body).innerHTML = '<div class="empty">Needs a connection.</div>'; return; }
+    try {
+      const list = await api('GET', '/api/agents');
+      $('.agent-list', body).innerHTML = list.length ? `<h4>Your agents · ${list.length}</h4>${list.map((a) => `
+        <div class="frow">
+          <div class="prow${a.revoked ? ' dim' : ''}">${icon('robot')}<span class="name">${esc(a.callsign)}</span>
+            <span class="meta">${a.revoked ? 'revoked' : a.lastUsedAt ? `used ${ago(a.lastUsedAt)}` : 'never used'}</span></div>
+          ${a.revoked ? '' : `<button class="mini" data-revoke="${esc(a.id)}" data-name="${esc(a.callsign)}" aria-label="Revoke">${icon('x')}</button>`}
+        </div>`).join('')}` : '<div class="empty">No agents yet.</div>';
+    } catch (ex) {
+      $('.agent-list', body).innerHTML = `<div class="empty">Could not load agents: ${esc(ex.message)}</div>`;
+    }
+  }
+
+  async function connectAgent() {
+    let res;
+    try {
+      res = await api('POST', '/api/agents');
+    } catch (ex) {
+      toast(`Could not create agent: ${ex.message}`);
+      return;
+    }
+    openFrom('agents', () => openSheet(`
+      <h2>${icon('robot')} ${esc(res.agent.callsign)}</h2>
+      <p class="sub">Paste this into your AI agent (Claude Code or similar). The token is
+        <b>shown only once</b>. Anyone with it can read your team's data.</p>
+      <textarea class="prompt" readonly rows="6">${esc(res.prompt)}</textarea>
+      <div class="row actions">
+        <button class="btn primary" data-a="copy">${icon('copy')} Copy prompt</button>
+      </div>`));
+    $('#sheet').onclick = async (e) => {
+      if (e.target.closest('[data-a]')?.dataset.a !== 'copy') return;
+      const ta = $('#sheet .prompt');
+      try {
+        await navigator.clipboard.writeText(ta.value);
+      } catch {
+        ta.select(); // no clipboard API (plain http): the text is selected for manual copy
+        document.execCommand?.('copy');
+      }
+      toast('Prompt copied');
+    };
+  }
+
+  function confirmRevoke(id, name) {
+    const s = openSheet(`
+      <h2>Revoke ${esc(name)}?</h2>
+      <p>Its token stops working at once. Its folder and objects stay on the map.</p>
+      <div class="row actions">
+        <button class="btn" data-a="no">Cancel</button>
+        <button class="btn danger" data-a="yes">Revoke</button>
+      </div>`);
+    s.onclick = async (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'no') { closeSheet(); togglePop('agents'); }
+      if (a !== 'yes') return;
+      try {
+        await api('DELETE', `/api/agents/${encodeURIComponent(id)}`);
+        toast(`${name} revoked`);
+      } catch (ex) {
+        toast(`Could not revoke: ${ex.message}`);
+      }
+      closeSheet();
+      togglePop('agents');
+    };
   }
 
   // ----- drawing -----
@@ -739,7 +831,7 @@ function startApp(session) {
   // ----- panel (details, forms) -----
   // Opens in the same place as the menus (where the button column was), to keep
   // the map free. A panel opened from a menu shows "‹ <menu>" to go back to it.
-  const FAB_LABEL = { view: 'View', goto: 'Go to', objects: 'Obj' };
+  const FAB_LABEL = { view: 'View', goto: 'Go to', objects: 'Obj', agents: 'Agent' };
   let panelFrom = null; // menu the current panel was opened from, or null (map tap, link)
   function openFrom(menu, fn) {
     closePops();
@@ -784,8 +876,11 @@ function startApp(session) {
     return `${it.coords.length} pts · ${a < 1e6 ? `${Math.round(a)} m²` : `${(a / 1e6).toFixed(2)} km²`}`;
   }
 
+  // Callsign for display; agents get a robot mark.
   function author(uid) {
-    return sync.users.get(uid)?.callsign ?? sync.positions.get(uid)?.callsign ?? (uid === me.id ? me.callsign : uid ? uid.slice(0, 6) : 'system');
+    const u = sync.users.get(uid);
+    const name = u?.callsign ?? sync.positions.get(uid)?.callsign ?? (uid === me.id ? me.callsign : uid ? uid.slice(0, 6) : 'system');
+    return u?.ownerId ? `${name} 🤖` : name;
   }
 
   function showItem(id) {
@@ -896,7 +991,8 @@ function startApp(session) {
     const canDelete = !owner && objs.length === 0;
     const s = openSheet(`
       <h2>${icon('folder')} ${esc(f.name)}</h2>
-      <div class="sub">${owner ? `Personal folder of ${esc(owner.callsign)}` : `Shared folder · created by ${esc(author(f.createdBy))}`}</div>
+      <div class="sub">${owner ? (owner.ownerId ? `Agent folder of ${esc(author(owner.id))}, agent of ${esc(author(owner.ownerId))}`
+        : `Personal folder of ${esc(owner.callsign)}`) : `Shared folder · created by ${esc(author(f.createdBy))}`}</div>
       <div class="sub">${objs.length} object${objs.length === 1 ? '' : 's'} · ${vis ? 'shown' : 'hidden'} on map${isTarget ? ' · current (new objects go here)' : ''}</div>
       <div class="row actions">
         <button class="btn" data-a="vis">${vis ? 'Hide' : 'Show'}</button>

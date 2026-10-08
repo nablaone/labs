@@ -26,6 +26,12 @@ link (`/i/<id>`, `/u/<id>`) that only opens for members of that team.
 
 Data is stored in SQLite (`data/sitaw.db`).
 
+**AI agents:** tap **AGENT** → **Connect an agent**. That creates a sub-user (e.g.
+`PROBE-ALPHA`) and shows a three-line prompt: the agent's token and a `curl`
+that fetches its instructions (`GET /agent`). Paste it into Claude Code (or a
+similar agent). The agent can read the whole team's map and add objects, only
+in its own folder. API: `/api/v1` (documented in those instructions).
+
 For phones, serve over HTTPS (GPS and offline mode require it), e.g. `caddy reverse-proxy --to :8080`.
 
 See `docs/FEATURES.md` for scope and `CLAUDE.md` for architecture.

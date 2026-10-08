@@ -22,6 +22,7 @@ type Server struct {
 	adminToken string
 	baseURL    string
 	log        *slog.Logger
+	limiter    *rateLimiter
 }
 
 func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Logger) *Server {
@@ -32,6 +33,7 @@ func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Lo
 		adminToken: adminToken,
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		log:        log,
+		limiter:    &rateLimiter{wins: map[string]*window{}},
 	}
 }
 
@@ -46,6 +48,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/join", s.handleJoin)
 	mux.HandleFunc("GET /api/me", s.withUser(s.handleMe))
 	mux.HandleFunc("GET /ws", s.handleWS)
+
+	// Agents: managed by people, used by AI agents through /api/v1.
+	mux.HandleFunc("GET /api/agents", s.humanOnly(s.handleListAgents))
+	mux.HandleFunc("POST /api/agents", s.humanOnly(s.handleCreateAgent))
+	mux.HandleFunc("DELETE /api/agents/{id}", s.humanOnly(s.handleRevokeAgent))
+	mux.HandleFunc("GET /agent", s.withAPIUser(s.handleAgentInstructions))
+
+	api := func(pattern string, h func(http.ResponseWriter, *http.Request, store.User)) {
+		mux.HandleFunc(pattern, s.withAPIUser(h))
+	}
+	api("GET /api/v1/me", s.handleAPIMe)
+	api("GET /api/v1/team", s.handleAPITeam)
+	api("GET /api/v1/positions", s.handleAPIPositions)
+	api("GET /api/v1/folders", s.handleAPIFolders)
+	api("GET /api/v1/objects", s.handleAPIObjects)
+	api("GET /api/v1/objects/{id}", s.handleAPIObject)
+	api("POST /api/v1/objects", s.handleAPICreate)
+	api("PATCH /api/v1/objects/{id}", s.handleAPIUpdate)
+	api("DELETE /api/v1/objects/{id}", s.handleAPIDelete)
+	api("GET /api/v1/geo/convert", s.handleGeoConvert)
+	api("GET /api/v1/geo/measure", s.handleGeoMeasure)
+	api("GET /api/v1/geo/nearby", s.handleGeoNearby)
+	api("GET /api/v1/geo/inside", s.handleGeoInside)
 
 	mux.HandleFunc("GET /api/admin/teams", s.withAdmin(s.handleListTeams))
 	mux.HandleFunc("POST /api/admin/teams", s.withAdmin(s.handleCreateTeam))

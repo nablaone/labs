@@ -138,6 +138,9 @@ implemented but have not been tested by hand in a browser yet.
 | Admin: teams, invites, members | MVP | [~] | Admin token and HTTP API; no UI yet |
 | Kick a user (revoke a session) | MVP | [x] | Admin API; closes their connection and removes their marker for everyone |
 | CoT (Cursor-on-Target) bridge to real ATAK | Later | [ ] | Interop with ATAK devices |
+| AI agents ("Connect an agent") | MVP | [x] | Sub-users `<OWNER>-<NATO>`; a 3-line prompt (token + fetch `/agent`), REST `/api/v1`; read everything, write only in their own folder |
+| Geo API (convert, measure, nearby, inside) | MVP | [x] | For agents; MGRS or degrees in, both out |
+| MCP server for agents | Later | [ ] | Same API exposed as MCP tools |
 | TLS | MVP | [~] | Expected behind a reverse proxy (Caddy) |
 
 ## 10. Offline behavior

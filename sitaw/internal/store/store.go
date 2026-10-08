@@ -65,19 +65,25 @@ type User struct {
 	ID        string `json:"id"`
 	TeamID    string `json:"teamId"`
 	Callsign  string `json:"callsign"`
-	FolderID  string `json:"folderId"` // personal folder
+	FolderID  string `json:"folderId"`          // personal folder
+	OwnerID   string `json:"ownerId,omitempty"` // set for agents: the user who owns them
 	CreatedAt int64  `json:"createdAt"`
 }
+
+// IsAgent reports whether u is an agent (a sub-user acting for OwnerID).
+func (u User) IsAgent() bool { return u.OwnerID != "" }
 
 // PublicUser is what other team members get to see.
 type PublicUser struct {
 	ID       string `json:"id"`
 	Callsign string `json:"callsign"`
 	FolderID string `json:"folderId"`
+	OwnerID  string `json:"ownerId,omitempty"` // agents only
+	Revoked  bool   `json:"revoked,omitempty"` // agents only
 }
 
 func (u User) Public() PublicUser {
-	return PublicUser{ID: u.ID, Callsign: u.Callsign, FolderID: u.FolderID}
+	return PublicUser{ID: u.ID, Callsign: u.Callsign, FolderID: u.FolderID, OwnerID: u.OwnerID}
 }
 
 type Invite struct {
@@ -102,6 +108,8 @@ var (
 	ErrForeignItem = errors.New("item belongs to another team")
 	// ErrFolderInUse refuses deleting a personal or non-empty folder.
 	ErrFolderInUse = errors.New("folder is personal or not empty")
+	// ErrForbidden refuses an agent write outside its own folder.
+	ErrForbidden = errors.New("agents may only change objects in their own folder")
 )
 
 const schema = `
@@ -323,8 +331,8 @@ func (s *Store) Join(inviteToken, callsign string) (User, Team, string, error) {
 
 func (s *Store) UserByToken(token string) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, team_id, callsign, folder_id, created_at FROM users WHERE token_hash = ?`, hashToken(token)).
-		Scan(&u.ID, &u.TeamID, &u.Callsign, &u.FolderID, &u.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, team_id, callsign, folder_id, owner_id, created_at FROM users WHERE token_hash = ? AND revoked = 0`, hashToken(token)).
+		Scan(&u.ID, &u.TeamID, &u.Callsign, &u.FolderID, &u.OwnerID, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUnauthorized
 	}
@@ -333,16 +341,28 @@ func (s *Store) UserByToken(token string) (User, error) {
 
 // RemoveUser deletes a user (invalidating their token and dropping their
 // position) and returns the team they were in. Items they created stay.
+// The user's agents are revoked, not deleted, so their work keeps its author.
 func (s *Store) RemoveUser(id string) (teamID string, err error) {
-	err = s.db.QueryRow(`DELETE FROM users WHERE id = ? RETURNING team_id`, id).Scan(&teamID)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRow(`DELETE FROM users WHERE id = ? RETURNING team_id`, id).Scan(&teamID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	}
-	return teamID, err
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(revokeSQL+` WHERE owner_id = ?`, id); err != nil {
+		return "", err
+	}
+	return teamID, tx.Commit()
 }
 
 func (s *Store) Users(teamID string) ([]PublicUser, error) {
-	rows, err := s.db.Query(`SELECT id, callsign, folder_id FROM users WHERE team_id = ? ORDER BY callsign`, teamID)
+	rows, err := s.db.Query(`SELECT id, callsign, folder_id, owner_id, revoked FROM users WHERE team_id = ? ORDER BY callsign`, teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +370,7 @@ func (s *Store) Users(teamID string) ([]PublicUser, error) {
 	out := []PublicUser{}
 	for rows.Next() {
 		var u PublicUser
-		if err := rows.Scan(&u.ID, &u.Callsign, &u.FolderID); err != nil {
+		if err := rows.Scan(&u.ID, &u.Callsign, &u.FolderID, &u.OwnerID, &u.Revoked); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -383,6 +403,7 @@ func scanItem(row interface{ Scan(...any) error }, extra ...any) (Item, error) {
 // stored and whether the incoming one was applied. An id that exists in
 // another team is refused, as is deleting a personal or non-empty folder.
 // A map object sent without a folder goes into the user's personal folder.
+// Agents may only write map objects inside their own folder (ErrForbidden).
 func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -409,6 +430,13 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 		return cur, false, nil
 	default:
 		in.CreatedBy = cur.CreatedBy
+	}
+	if by.IsAgent() {
+		// Both the object as it is and as it would be must sit in the agent's folder.
+		if in.Kind == KindFolder || (!in.Deleted && in.Folder != by.FolderID) ||
+			(cur.ID != "" && (cur.Kind == KindFolder || cur.Folder != by.FolderID)) {
+			return cur, false, ErrForbidden
+		}
 	}
 	if in.Deleted && cur.Kind == KindFolder && !cur.Deleted {
 		var users, items int

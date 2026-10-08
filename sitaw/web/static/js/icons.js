@@ -31,6 +31,8 @@ const P = {
   star: '<path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4 6.5 20.3l1-6.2L3 9.7l6.2-.9L12 3Z"/>',
   more: '<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
+  robot: '<rect x="4" y="8" width="16" height="12"/><path d="M12 4v4M2 13v3M22 13v3"/><circle cx="12" cy="3.5" r="1.2" fill="currentColor"/><path d="M9 13v1M15 13v1M9 17h6"/>',
+  copy: '<rect x="8" y="8" width="12" height="12"/><path d="M16 8V4H4v12h4"/>',
   chevronLeft: '<path d="m15 6-6 6 6 6"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>',

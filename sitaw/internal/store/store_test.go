@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -310,5 +311,100 @@ func TestMigrateFolders(t *testing.T) {
 	}
 	if folders[byID["i2"].Folder] != "Unsorted" {
 		t.Fatalf("orphan not in Unsorted: %+v", byID["i2"])
+	}
+}
+
+func TestAgents(t *testing.T) {
+	s := open(t)
+	team, inv := must2(s.CreateTeam("a"))
+	owner, _, _, _ := s.Join(inv.Token, "probe")
+	other, _, _, _ := s.Join(inv.Token, "bravo")
+
+	a, tok, err := s.CreateAgent(owner)
+	if err != nil || a.Callsign != "PROBE-ALPHA" || a.OwnerID != owner.ID || !strings.HasPrefix(tok, AgentTokenPrefix) {
+		t.Fatalf("first agent: %v %+v %q", err, a, tok)
+	}
+	b, _, _ := s.CreateAgent(owner)
+	if b.Callsign != "PROBE-BRAVO" {
+		t.Fatalf("second agent: %q", b.Callsign)
+	}
+	// A human who already holds the next callsign makes the agent skip it.
+	s.Join(inv.Token, "probe-charlie")
+	c, _, _ := s.CreateAgent(owner)
+	if c.Callsign != "PROBE-DELTA" {
+		t.Fatalf("skip taken callsign: %q", c.Callsign)
+	}
+	if _, _, err := s.CreateAgent(a); err != ErrForbidden {
+		t.Fatalf("agent creating an agent: %v", err)
+	}
+
+	// The token logs in as the agent; it has its own personal folder.
+	got, err := s.UserByToken(tok)
+	if err != nil || got.ID != a.ID || !got.IsAgent() {
+		t.Fatalf("agent login: %v %+v", err, got)
+	}
+	if f, err := s.Item(team.ID, a.FolderID); err != nil || f.Name != "PROBE-ALPHA" {
+		t.Fatalf("agent folder: %v %+v", err, f)
+	}
+
+	// Writes: only inside its own folder, in both directions.
+	now := time.Now().UnixMilli()
+	wp := Item{ID: NewUUID(), Kind: KindWaypoint, Coords: [][2]float64{{1, 2}}, UpdatedAt: now}
+	stored, ok, err := s.PutItem(team.ID, wp, a)
+	if !ok || err != nil || stored.Folder != a.FolderID || stored.CreatedBy != a.ID {
+		t.Fatalf("agent create in own folder: %v %v %+v", ok, err, stored)
+	}
+	elsewhere := wp
+	elsewhere.ID, elsewhere.Folder = NewUUID(), owner.FolderID
+	if _, _, err := s.PutItem(team.ID, elsewhere, a); err != ErrForbidden {
+		t.Fatalf("agent create in other folder: %v", err)
+	}
+	moveOut := stored
+	moveOut.Folder, moveOut.UpdatedAt = owner.FolderID, now+1
+	if _, _, err := s.PutItem(team.ID, moveOut, a); err != ErrForbidden {
+		t.Fatalf("agent moving its object out: %v", err)
+	}
+	humans, _, _ := s.PutItem(team.ID, Item{ID: NewUUID(), Kind: KindWaypoint, Coords: [][2]float64{{1, 2}}, UpdatedAt: now}, other)
+	edit := humans
+	edit.Name, edit.UpdatedAt, edit.Folder = "pwned", now+2, a.FolderID
+	if _, _, err := s.PutItem(team.ID, edit, a); err != ErrForbidden {
+		t.Fatalf("agent pulling a human object into its folder: %v", err)
+	}
+	if _, _, err := s.PutItem(team.ID, Item{ID: NewUUID(), Kind: KindFolder, Name: "x", UpdatedAt: now}, a); err != ErrForbidden {
+		t.Fatalf("agent creating a folder: %v", err)
+	}
+	if _, ok, err := s.PutItem(team.ID, Item{ID: stored.ID, Kind: KindWaypoint, Deleted: true, UpdatedAt: now + 3}, a); !ok || err != nil {
+		t.Fatalf("agent deleting its own object: %v %v", ok, err)
+	}
+	// Humans may still work in the agent's folder (the team trusts itself).
+	if _, ok, err := s.PutItem(team.ID, Item{ID: NewUUID(), Kind: KindWaypoint, Coords: [][2]float64{{1, 2}}, Folder: a.FolderID, UpdatedAt: now}, other); !ok || err != nil {
+		t.Fatalf("human writing into agent folder: %v %v", ok, err)
+	}
+
+	// Listing, revoking, and the owner's removal.
+	if list := must(s.Agents(owner.ID)); len(list) != 3 {
+		t.Fatalf("agents: %+v", list)
+	}
+	if _, err := s.RevokeAgent(other.ID, a.ID); err != ErrNotFound {
+		t.Fatalf("revoking someone else's agent: %v", err)
+	}
+	if u, err := s.RevokeAgent(owner.ID, a.ID); err != nil || !u.Revoked {
+		t.Fatalf("revoke: %v %+v", err, u)
+	}
+	if _, err := s.UserByToken(tok); err != ErrUnauthorized {
+		t.Fatalf("revoked token still works: %v", err)
+	}
+	must(s.RemoveUser(owner.ID))
+	for _, ag := range must(s.Agents(owner.ID)) {
+		if !ag.Revoked {
+			t.Fatalf("agent of removed owner still active: %+v", ag)
+		}
+	}
+	roster := map[string]PublicUser{}
+	for _, u := range must(s.Users(team.ID)) {
+		roster[u.Callsign] = u
+	}
+	if r := roster["PROBE-ALPHA"]; !r.Revoked || r.OwnerID != owner.ID {
+		t.Fatalf("revoked agent should stay in roster: %+v", r)
 	}
 }
