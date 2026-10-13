@@ -25,7 +25,7 @@ type Server struct {
 	baseURL    string // external address; "" = derive from each request
 	log        *slog.Logger
 	limiter    *rateLimiter
-	etags      map[string]string // static file path -> quoted content hash
+	assets     *assets // versioned asset URLs, rewritten index.html and sw.js
 }
 
 func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Logger) *Server {
@@ -37,7 +37,7 @@ func New(st *store.Store, static fs.FS, adminToken, baseURL string, log *slog.Lo
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		log:        log,
 		limiter:    &rateLimiter{wins: map[string]*window{}},
-		etags:      hashFiles(static),
+		assets:     newAssets(static),
 	}
 }
 
@@ -122,15 +122,13 @@ func (s *Server) Handler() http.Handler {
 		if p == "/join" || p == "/login" || strings.HasPrefix(p, "/i/") || strings.HasPrefix(p, "/u/") {
 			r.URL.Path = "/"
 		}
-		// Static files: always revalidate (browsers, the service worker and any
-		// CDN such as Cloudflare), answered cheaply with 304 via a content ETag.
-		// Without this, a CDN may serve old JS against a new server for hours.
-		w.Header().Set("Cache-Control", "no-cache")
-		name := strings.TrimPrefix(r.URL.Path, "/")
-		if name == "" {
-			name = "index.html"
+		// index.html, sw.js and /v/<build>/... (see assets.go).
+		if s.assets.serve(w, r, files) {
+			return
 		}
-		if tag, ok := s.etags[name]; ok {
+		// Other static files (manifest, icon): always revalidate, cheap 304s.
+		w.Header().Set("Cache-Control", "no-cache")
+		if tag, ok := s.assets.etags[strings.TrimPrefix(r.URL.Path, "/")]; ok {
 			w.Header().Set("ETag", tag)
 		}
 		files.ServeHTTP(w, r)

@@ -1,10 +1,12 @@
 // Service worker: offline app shell + map tile cache.
-//  - App shell: network-first with a short timeout, cache fallback when offline.
+//  - Page and sw entry: network-first with a short timeout, cache fallback offline.
+//  - Build files under /v/<build>/: cache-first (they never change).
 //  - Tiles: cache-first, capped at MAX_TILES entries (oldest evicted first).
 //  - API and WebSocket traffic is never cached.
-// Bump VERSION when the shell file list changes.
+// Asset URLs below are rewritten by the server to /v/<build>/...; there is
+// nothing to bump by hand.
 
-const VERSION = 'v19';
+const VERSION = 'dev'; // replaced by the server with the build hash (assets.go)
 const SHELL_CACHE = `sitaw-shell-${VERSION}`;
 const TILE_CACHE = 'sitaw-tiles';
 const MAX_TILES = 4000;
@@ -42,10 +44,28 @@ self.addEventListener('fetch', (e) => {
   }
   if (url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname === '/ws') return;
 
+  // Versioned build files (/v/<build>/...) never change: cache first.
+  if (url.pathname.startsWith('/v/')) {
+    e.respondWith(versioned(req, url.pathname));
+    return;
+  }
   // SPA routes (/, /join?t=...) all map to the cached index.
   const key = req.mode === 'navigate' ? '/' : url.pathname;
   e.respondWith(shell(req, key));
 });
+
+async function versioned(req, key) {
+  const cache = await caches.open(SHELL_CACHE);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  try {
+    const res = await fetch(req);
+    if (res.ok && key.startsWith(`/v/${VERSION}/`)) cache.put(key, res.clone());
+    return res;
+  } catch {
+    return new Response('offline', { status: 503 });
+  }
+}
 
 const NETWORK_TIMEOUT = 3000;
 

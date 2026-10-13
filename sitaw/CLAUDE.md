@@ -120,7 +120,7 @@ internal/server/         HTTP API, WebSocket hub and protocol (ws.go), validatio
 web/embed.go             embeds web/static
 web/static/
   index.html, css/app.css
-  sw.js                  service worker (bump VERSION when the SHELL list changes)
+  sw.js                  service worker (VERSION and asset URLs are filled in by the server)
   js/app.js              boot, auth/join, UI wiring, menus and panels, GPS
   js/sync.js             WebSocket client, local replica, outbox, LWW
   js/db.js               IndexedDB kv/items/outbox
@@ -249,6 +249,17 @@ Settings are flags that default to env vars (`SITAW_ADDR`, `SITAW_DB`, `SITAW_BA
 (`Server.publicURL`): invite links, agent prompts, agent instructions. When unset,
 the address is derived from each request (X-Forwarded-Proto/Host, else Host).
 That isn't enough behind `tailscale serve`, which doesn't forward the scheme.
+
+## Versioned assets (no stale JS)
+
+`internal/server/assets.go`: `js/`, `css/` and `vendor/` are served under
+`/v/<build hash>/...` (the hash of all static files), cached for a year as
+immutable. `index.html` and `sw.js` are rewritten at startup to point there, and the
+service worker's cache is named after the build (`VERSION = 'dev'` in the source
+is replaced). Relative module imports stay inside one build, so a page can never
+run old JS against new HTML, whatever a browser, the service worker or Cloudflare
+has cached. New files under those folders need no registration. Only add a
+file to the SW `SHELL` list if it must work offline before first use.
 
 ## Deployment
 

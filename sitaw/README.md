@@ -71,8 +71,9 @@ docker compose logs sitaw | grep invite    # the first team's invite link
 3. Optional: `SITAW_PORT=127.0.0.1:8080` publishes the port on localhost only,
    so the app is reachable only through the tunnel (when cloudflared runs on the host).
 
-No cache rules are needed: sitaw sends `Cache-Control: no-cache` with ETags, so
-Cloudflare never serves an old app version. If you put **Cloudflare Access** in
+No cache rules are needed: app files are served under a per-build path
+(`/v/<build>/…`) and the page itself is revalidated on every load, so Cloudflare
+never serves an old app version. If you put **Cloudflare Access** in
 front, add a bypass for `/api/v1/*` and `/agent`, or AI agents (which use bearer
 tokens) can't get through. The app has its own invite-based login.
 
