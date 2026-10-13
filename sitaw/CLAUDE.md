@@ -52,6 +52,15 @@ you ship something, and check the "Not doing" list before adding ATAK features.
     folder**, where new objects go (`prefs.drawFolder`, default: your personal
     folder; `setCurrentFolder`). Tapping another folder makes it current, which
     unfolds it and folds the previous one. The list only; map visibility is View.
+  - Moving a waypoint: its edit form has a Position field (MGRS or lat/lon,
+    `parseAnyCoord`), a ✛ to the crosshair, and "Move on map". The latter hides
+    the form (it covers the map on phones), makes the marker draggable, and lets a
+    map tap place it; DONE/CANCEL return to the form with unsaved edits kept
+    (`posEdit`, `moveMode`). Nothing is stored until Save; closing reverts.
+  - Locations in details (waypoints, positions) are shown big (`bigCoord`: MGRS
+    plus lat/lon). **Double tap** copies the MGRS, as does double tapping the centre
+    coordinate in the bottom-left. `onDoubleTap` counts two taps within 400 ms,
+    because phones don't reliably send dblclick.
   - Details and forms open in a **panel in the same place as the menus**
     (`#sheet`, `openSheet`). A panel opened from a
     menu (`openFrom('objects', …)`) has a "‹ OBJ" back button; one opened from a

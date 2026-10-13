@@ -199,6 +199,7 @@ function startApp(session) {
   };
   const objectsIn = (fid) => sync.liveItems().filter((i) => !isFolder(i) && folderOf(i) === fid && geom(i));
 
+  let posEdit = null; // waypoint being moved in its edit form: { id, at: [lat, lon], bad }
   const items = new ItemsLayer(map, (id, latlng) => onItemTap(id, latlng), (it) => folderVisible(folderOf(it)), rbEnds);
   // Re-draw the R&B lines that end at an object that just changed.
   function refreshRBLines(endId) {
@@ -327,6 +328,7 @@ function startApp(session) {
     if (it.id === selectedId) select(live(it) ? it : null);
     // A folder change can move many objects in or out of view.
     if (isFolder(it)) items.reset(sync.liveItems()); else items.upsert(it);
+    if (posEdit?.id === it.id) { if (live(it)) armDrag(); else stopPosEdit(); }
     if (it.kind === 'waypoint' || it.kind === 'position') refreshRBLines(it.id);
     if (it.kind === 'position') {
       if (it.createdBy === me.id || it.id === myPositionId()) renderSelf();
@@ -571,7 +573,8 @@ function startApp(session) {
   document.addEventListener('click', (e) => { if (e.target.closest('[data-pop-close]')) closePops(); });
   // "+ Folder" lives in the Objects title bar (outside the re-rendered body).
   $('[data-pop="objects"] [data-act="new-folder"]').addEventListener('click', () => openFrom('objects', newFolder));
-  map.on('click', () => {
+  map.on('click', (e) => {
+    if (moveMode) { moveEdit([e.latlng.lat, e.latlng.lng]); return; } // tap = put the waypoint here
     if (draw.active) return;
     closePops();
     closeSheet();
@@ -1130,6 +1133,7 @@ function startApp(session) {
     fn();
   }
   function openSheet(html) {
+    stopPosEdit();
     const s = $('#sheet');
     const back = panelFrom
       ? `<button class="sheet-back" data-sheet-back>${icon('chevronLeft')}${esc(FAB_LABEL[panelFrom])}</button>` : '<span></span>';
@@ -1140,6 +1144,14 @@ function startApp(session) {
     markTiles();
     return s;
   }
+  // Double tap a big location (details) or the centre coordinate (bottom
+  // left) to copy it.
+  onDoubleTap($('#sheet'), '[data-copy-coord]', (t) => copyText(t.dataset.copyCoord, `Copied ${t.dataset.copyCoord}`));
+  onDoubleTap($('#status'), '#center-coord', () => {
+    const c = map.getCenter();
+    const m = formatCoord(c.lat, c.lng);
+    copyText(m, `Copied ${m}`);
+  });
   $('#sheet').addEventListener('click', (e) => {
     if (e.target.closest('[data-sheet-close]')) closeSheet();
     else if (e.target.closest('[data-sheet-back]')) {
@@ -1149,6 +1161,7 @@ function startApp(session) {
     }
   });
   function hideSheet() {
+    stopPosEdit();
     $('#sheet').hidden = true;
     panelFrom = null;
     markTiles();
@@ -1180,13 +1193,22 @@ function startApp(session) {
     return u?.ownerId ? `${name} 🤖` : name;
   }
 
+  // A location shown big: MGRS, lat/lon below. Double tap copies the MGRS
+  // (wired once on the panel, see onDoubleTap below).
+  function bigCoord([lat, lon]) {
+    const m = formatCoord(lat, lon);
+    return `<div class="big-coord" data-copy-coord="${esc(m)}" title="Double tap to copy">${esc(m)}
+      <span class="deg">${esc(formatDegrees(lat, lon))}</span></div>`;
+  }
+
   // A position object: someone's location. Only its own user can change it,
   // through the position actions (no edit form, no plain delete).
   function showPosition(it) {
     const mine = it.createdBy === me.id;
     const s = openSheet(`
       <h2>${icon('gps')} ${esc(author(it.createdBy))}</h2>
-      <div class="sub">Position · ${esc(formatCoord(it.coords[0][0], it.coords[0][1]))}</div>
+      <div class="sub">Position</div>
+      ${bigCoord(it.coords[0])}
       <div class="sub">${esc(posSummary(it))}${!mine && myPosition() ? ` · ${esc(formatDistance(here().distanceTo(it.coords[0])))} away` : ''}</div>
       <div class="row actions">
         <button class="btn" data-a="zoom">Zoom</button>
@@ -1265,7 +1287,8 @@ function startApp(session) {
     const fid = folderOf(it);
     const s = openSheet(`
       <h2>${esc(it.name || KIND_LABEL[it.kind])}</h2>
-      <div class="sub">${esc(KIND_LABEL[it.kind])} · ${esc(describe(it))}</div>
+      ${it.kind === 'waypoint' ? `<div class="sub">${esc(KIND_LABEL[it.kind])}</div>${bigCoord(it.coords[0])}`
+        : `<div class="sub">${esc(KIND_LABEL[it.kind])} · ${esc(describe(it))}</div>`}
       <div class="sub">in <button class="folder-link" data-a="folder">${esc(folderName(fid))}</button></div>
       ${it.remarks ? `<p>${esc(it.remarks)}</p>` : ''}
       <div class="sub">by ${esc(author(it.createdBy))} · ${new Date(it.updatedAt).toLocaleString()}</div>
@@ -1306,21 +1329,31 @@ function startApp(session) {
   const folderOptions = (selected) => allFolders()
     .map((f) => `<option value="${esc(f.id)}"${f.id === selected ? ' selected' : ''}>${esc(f.name)}</option>`).join('');
 
-  function editItem(id) {
+  // draft: unsaved form values, kept while the user moves the waypoint on the map.
+  function editItem(id, draft = null) {
     const it = sync.items.get(id);
     if (!it) return;
-    let color = it.color || DEFAULT_COLORS[it.kind];
+    const keepAt = posEdit?.id === id ? posEdit.at : null; // openSheet would revert it
+    let color = draft?.color ?? (it.color || DEFAULT_COLORS[it.kind]);
     const s = openSheet(`
       <h2>${esc(KIND_LABEL[it.kind])}</h2>
       <div class="sub">${esc(describe(it))}</div>
       <label for="f-name">Name</label>
-      <input id="f-name" maxlength="80" value="${esc(it.name)}">
+      <input id="f-name" maxlength="80" value="${esc(draft?.name ?? it.name)}">
+      ${it.kind === 'waypoint' ? `
+      <label for="f-pos">Position · drag the marker, or type MGRS / lat, lon</label>
+      <div class="inrow">
+        <input id="f-pos" value="${esc(formatCoord(...it.coords[0]))}" autocapitalize="characters" autocomplete="off" spellcheck="false">
+        <button class="btn icon-btn" data-a="pos-center" aria-label="Move to the crosshair" title="Move to the crosshair">${icon('plus')}</button>
+      </div>
+      <button class="btn" data-a="pos-move">${icon('navigate')} Move on map</button>
+      <div class="sub pos-hint" id="f-pos-hint"></div>` : ''}
       <label for="f-folder">Folder</label>
-      <select id="f-folder">${folderOptions(folderOf(it))}</select>
+      <select id="f-folder">${folderOptions(draft?.folder ?? folderOf(it))}</select>
       <label>Color</label>
       <div class="swatches">${COLORS.map((c) => `<button class="swatch${c === color ? ' sel' : ''}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}</div>
       <label for="f-remarks">Remarks</label>
-      <textarea id="f-remarks" maxlength="2000">${esc(it.remarks)}</textarea>
+      <textarea id="f-remarks" maxlength="2000">${esc(draft?.remarks ?? it.remarks)}</textarea>
       <div class="row actions">
         <button class="btn" data-a="cancel">Close</button>
         <button class="btn primary" data-a="save">Save</button>
@@ -1333,18 +1366,99 @@ function startApp(session) {
         return;
       }
       const a = e.target.closest('[data-a]')?.dataset.a;
-      if (a === 'cancel') { if (sync.items.get(id)) openItem(id, false); else closeSheet(); }
+      if (a === 'pos-center') { const c = map.getCenter(); moveEdit([c.lat, c.lng]); }
+      else if (a === 'pos-move') {
+        startMoveMode(id, { name: $('#f-name').value, remarks: $('#f-remarks').value, folder: $('#f-folder').value, color });
+      }
+      else if (a === 'cancel') { if (sync.items.get(id)) openItem(id, false); else closeSheet(); }
       else if (a === 'save') {
         const cur = sync.items.get(id);
+        const coords = posEdit?.id === id ? [posEdit.at] : cur.coords;
+        if (posEdit?.id === id && posEdit.bad) { toast('Fix the position first'); return; }
         const folder = $('#f-folder').value;
         if (folder !== folderOf(cur) && !folderVisible(folder)) {
           setFolderVisible(folder, true);
           toast(`Moved to ${folderName(folder)} (now shown)`);
         }
-        await sync.putItem({ ...cur, name: $('#f-name').value.trim(), remarks: $('#f-remarks').value, color, folder });
+        stopPosEdit(false);
+        await sync.putItem({ ...cur, name: $('#f-name').value.trim(), remarks: $('#f-remarks').value, color, folder, coords });
         openItem(id, false);
       }
     };
+    if (it.kind === 'waypoint') startPosEdit(it, keepAt);
+  }
+
+  // ----- moving a waypoint while its edit form is open -----
+  // The marker becomes draggable and the Position field follows it; typing a
+  // position moves the marker. Nothing is stored until Save; otherwise the
+  // marker snaps back when the form closes.
+  function startPosEdit(it, at = null) {
+    posEdit = { id: it.id, at: at ?? [...it.coords[0]], bad: false };
+    armDrag();
+    if (at) moveEdit(at);
+    const input = $('#f-pos');
+    input.oninput = () => {
+      const p = parseAnyCoord(input.value);
+      posEdit.bad = !p;
+      $('#f-pos-hint').textContent = p ? '' : 'Not a position: try 34U DC 12345 67890 or 52.23, 21.01';
+      input.classList.toggle('invalid', !p);
+      if (p) moveEdit([p.lat, p.lon], false);
+    };
+  }
+  // Make the waypoint's marker draggable (again, after a redraw).
+  function armDrag() {
+    const m = posEdit && items.layers.get(posEdit.id);
+    if (!m?.dragging) return;
+    m.setLatLng(posEdit.at);
+    m.dragging.enable();
+    m.getElement()?.classList.add('dragging-edit');
+    m.off('drag').on('drag', () => { const ll = m.getLatLng(); moveEdit([ll.lat, ll.lng], true, false); });
+  }
+  // New position from a drag, the field or the crosshair button.
+  function moveEdit(at, updateField = true, moveMarker = true) {
+    if (!posEdit) return;
+    posEdit.at = at;
+    posEdit.bad = false;
+    if (moveMarker) items.layers.get(posEdit.id)?.setLatLng(at);
+    const input = $('#f-pos');
+    if (input && updateField) {
+      input.value = formatCoord(at[0], at[1]);
+      input.classList.remove('invalid');
+      $('#f-pos-hint').textContent = '';
+    }
+  }
+  // "Move on map": the edit form steps aside so the waypoint can be dragged,
+  // or placed by tapping the map; DONE returns to the form, CANCEL undoes.
+  let moveMode = null; // { id, draft, from }
+  function startMoveMode(id, draft) {
+    moveMode = { id, draft, from: posEdit.at };
+    $('#sheet').hidden = true; // not hideSheet(): that would end the edit
+    $('#movectl').hidden = false;
+    $('#move-hint').textContent = `Drag ${sync.items.get(id)?.name || 'the waypoint'}, or tap the map`;
+    armDrag();
+    focusItem({ ...sync.items.get(id), coords: [posEdit.at] }, null);
+  }
+  function endMoveMode(keep) {
+    if (!moveMode) return;
+    const { id, draft, from } = moveMode;
+    moveMode = null;
+    $('#movectl').hidden = true;
+    if (!keep) moveEdit(from);
+    editItem(id, draft);
+  }
+  L.DomEvent.disableClickPropagation($('#movectl'));
+  $('#movectl').addEventListener('click', (e) => {
+    const a = e.target.closest('[data-move]')?.dataset.move;
+    if (a) endMoveMode(a === 'done');
+  });
+
+  function stopPosEdit(revert = true) {
+    if (!posEdit) return;
+    const { id } = posEdit;
+    posEdit = null;
+    const it = sync.items.get(id);
+    if (revert && live(it)) items.upsert(it); // redraw at the stored position (not draggable)
+    else items.layers.get(id)?.dragging?.disable();
   }
 
   function zoomTo(it) {
@@ -1471,6 +1585,23 @@ function ago(ts) {
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+// Calls fn(target) on a double tap or double click inside el (on elements
+// matching sel). Phone browsers don't reliably send dblclick, so two taps
+// within 400 ms on the same element count.
+function onDoubleTap(el, sel, fn) {
+  let last = null;
+  el.addEventListener('click', (e) => {
+    const t = e.target.closest(sel);
+    if (!t) return;
+    const now = Date.now();
+    if (last && last.t === t && now - last.at < 400) {
+      last = null;
+      e.preventDefault();
+      fn(t);
+    } else last = { t, at: now };
+  });
 }
 
 // Copies text, falling back to a hidden textarea where the clipboard API is

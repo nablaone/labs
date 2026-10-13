@@ -183,9 +183,9 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 #drawctl { position: absolute; z-index: 1001; left: 8px; right: 8px; bottom: calc(100px + var(--safe-b));
   display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
 #drawctl > * { pointer-events: auto; }
-#rbctl { position: absolute; z-index: 1001; left: 8px; right: 8px; bottom: calc(100px + var(--safe-b));
+#movectl, #rbctl { position: absolute; z-index: 1001; left: 8px; right: 8px; bottom: calc(100px + var(--safe-b));
   display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
-#rbctl > * { pointer-events: auto; }
+#movectl > *, #rbctl > * { pointer-events: auto; }
 .fan-row { display: flex; }
 .fan-row .fab + .fab { margin-left: calc(-1 * var(--line)); }
 .hint { background: var(--ink); color: var(--paper); padding: 6px 10px; font-size: 13px; font-weight: 700;
@@ -236,6 +236,11 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 #sheet h2 { margin: 10px 0 6px; font-size: 18px; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
 #sheet h2 .i { display: inline-block; vertical-align: -4px; }
 #sheet .sub { color: var(--ink); font-size: 13px; }
+/* a location in details: big MGRS, lat/lon under it; double tap copies */
+.big-coord { margin: 6px 0 4px; padding: 6px 8px; border: var(--line) solid var(--rule); font-size: 22px; font-weight: 700;
+  letter-spacing: .02em; line-height: 1.2; cursor: copy; user-select: none; -webkit-user-select: none; }
+.big-coord .deg { display: block; font-size: 13px; font-weight: 400; letter-spacing: 0; }
+#center-coord { cursor: copy; user-select: none; -webkit-user-select: none; }
 #sheet p { margin: 10px 0; overflow-wrap: anywhere; } /* long URLs in remarks */
 /* actions stay reachable at the bottom of long panels (edit form) */
 #sheet .actions { position: sticky; bottom: -10px; margin: 12px -10px -10px; padding: 8px 10px 10px;
@@ -252,6 +257,9 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 
 /* --- map symbols --- */
 .wp-svg { display: block; overflow: visible; }
+/* waypoint being moved in its edit form: dashed outline says "drag me" */
+.dragging-edit { outline: 2px dashed #000; outline-offset: 4px; cursor: grab; }
+input.invalid { border-color: var(--danger); }
 /* "1.24 km · 045°" along a line segment */
 .seg-label { position: absolute; white-space: nowrap; pointer-events: none; background: #fff; border: 1px solid #000;
   padding: 0 4px; font: 700 11px var(--font); color: #000; }
