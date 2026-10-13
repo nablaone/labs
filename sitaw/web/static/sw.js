@@ -4,7 +4,7 @@
 //  - API and WebSocket traffic is never cached.
 // Bump VERSION when the shell file list changes.
 
-const VERSION = 'v18';
+const VERSION = 'v19';
 const SHELL_CACHE = `sitaw-shell-${VERSION}`;
 const TILE_CACHE = 'sitaw-tiles';
 const MAX_TILES = 4000;

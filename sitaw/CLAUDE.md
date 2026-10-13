@@ -36,7 +36,8 @@ you ship something, and check the "Not doing" list before adding ATAK features.
   round-trip). All UI formatting goes through `js/coords.js` so other formats
   can be added later. Don't call `toMGRS` directly from UI code.
 - **Mobile first, map-first UI**: no bars. A column of labelled tiles in the
-  **top-right** (Info, View, Go to, Objects, Draw, Agent). Opening one **hides the column**, and
+  **top-right** (Info, View, Go to, Objects, Draw, Agent), under a short hamburger
+  that folds the column away (`prefs.menuFolded`, remembered per device). Opening one **hides the column**, and
   the menu takes its place: one fixed spot for menus and panels (`.pop`, `#sheet`),
   each with a header bar (title or "‹ back", plus ✕). Closing it, or tapping the
   map, brings the column back. The bottom-left corner shows callsign · team, center MGRS, GPS and

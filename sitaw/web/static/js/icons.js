@@ -29,6 +29,7 @@ const P = {
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   eyeOff: '<path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.700 9.700 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   star: '<path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4 6.5 20.3l1-6.2L3 9.7l6.2-.9L12 3Z"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   more: '<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
   robot: '<rect x="4" y="8" width="16" height="12"/><path d="M12 4v4M2 13v3M22 13v3"/><circle cx="12" cy="3.5" r="1.2" fill="currentColor"/><path d="M9 13v1M15 13v1M9 17h6"/>',

@@ -87,7 +87,7 @@ async function showJoin(invite, session) {
 function loadPrefs() {
   // posMode: how this device maintains your position: 'gps' (fixes update it),
   // 'manual' (placed by hand, GPS ignored) or 'off' (location unknown).
-  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, night: false, posMode: 'gps' };
+  const def = { base: 'topo', show: { grid: true, team: true }, folders: {}, drawFolder: null, night: false, posMode: 'gps', menuFolded: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY));
     if (!p) return def;
@@ -98,6 +98,7 @@ function loadPrefs() {
       drawFolder: p.drawFolder ?? null,
       night: !!p.night,
       posMode: ['gps', 'manual', 'off'].includes(p.posMode) ? p.posMode : 'gps',
+      menuFolded: !!p.menuFolded,
     };
   } catch {
     return def;
@@ -562,9 +563,18 @@ function startApp(session) {
     markTiles();
   }
   $('#fab').addEventListener('click', (e) => {
+    if (e.target.closest('[data-fold]')) { setMenuFolded(!prefs.menuFolded); return; }
     const fab = e.target.closest('[data-fab]')?.dataset.fab;
     if (fab) togglePop(fab);
   });
+  // The hamburger folds the button column away to free the map (remembered).
+  function setMenuFolded(folded) {
+    prefs.menuFolded = folded;
+    savePrefs(prefs);
+    $('#fab').classList.toggle('folded', folded);
+    $('[data-fold]').setAttribute('aria-expanded', String(!folded));
+  }
+  setMenuFolded(prefs.menuFolded);
   for (const el of [$('#fab'), ...document.querySelectorAll('.pop')]) {
     L.DomEvent.disableClickPropagation(el);
     L.DomEvent.disableScrollPropagation(el);
