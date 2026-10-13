@@ -163,6 +163,14 @@ export class Sync extends EventTarget {
           this.outbox.delete(m.id);
           await db.del('outbox', m.id);
         }
+        // A refused R&B line (an end vanished meanwhile) never existed on the
+        // server: drop the local copy too.
+        if (m.error && !m.item && pending?.kind === 'rbline') {
+          const gone = { ...pending, deleted: true };
+          this.items.set(m.id, gone);
+          await db.put('items', m.id, gone);
+          this.emit('item', { item: gone });
+        }
         if (m.error) this.emit('rejected', { id: m.id, error: m.error });
         break;
       }

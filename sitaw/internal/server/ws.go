@@ -244,7 +244,7 @@ func (s *Server) handleMsg(c *client, m msg) {
 		if it.Pos != nil && (it.Pos.Fix <= 0 || it.Pos.Fix > now.Add(maxClockSkew).UnixMilli()) {
 			it.Pos.Fix = now.UnixMilli()
 		}
-		stored, applied, err := s.store.PutItem(team, *it, c.user)
+		stored, applied, cascaded, err := s.store.PutItemAll(team, *it, c.user)
 		if errors.Is(err, store.ErrForeignItem) {
 			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: "id in use"})
 			return
@@ -256,6 +256,11 @@ func (s *Server) handleMsg(c *client, m msg) {
 				ack.Item = &stored // the client puts the server copy back
 			}
 			s.reply(c, ack)
+			return
+		}
+		if errors.Is(err, store.ErrBadEnds) {
+			// e.g. an R&B line to a waypoint deleted meanwhile: drop it client-side.
+			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), SentAt: sentAt})
 			return
 		}
 		if errors.Is(err, store.ErrFolderInUse) {
@@ -270,6 +275,9 @@ func (s *Server) handleMsg(c *client, m msg) {
 		s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(applied), Item: &stored, SentAt: sentAt})
 		if applied {
 			s.hub.broadcast(team, msg{T: "item", Item: &stored})
+		}
+		for i := range cascaded { // R&B lines that lost an end
+			s.hub.broadcast(team, msg{T: "item", Item: &cascaded[i]})
 		}
 	}
 }

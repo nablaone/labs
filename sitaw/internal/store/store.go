@@ -29,7 +29,16 @@ const (
 	// users.position_id), in their personal folder, written only by them.
 	// Updated by GPS or placed by hand; deleted when the location is unknown.
 	KindPosition = "position"
+	// KindRBLine is a Range & Bearing line (ATAK's "R&B Line") between two
+	// objects, each a waypoint or a position: it stores only their ids (Ends)
+	// and follows them. Deleting either end deletes the line.
+	KindRBLine = "rbline"
 )
+
+// rbMeta is what an R&B line keeps in items.meta.
+type rbMeta struct {
+	Ends []string `json:"ends"`
+}
 
 // PosMeta is the extra data of a position object.
 type PosMeta struct {
@@ -60,7 +69,8 @@ type Item struct {
 	UpdatedBy string       `json:"updatedBy"`
 	UpdatedAt int64        `json:"updatedAt"` // unix ms, set by the editing client
 	Deleted   bool         `json:"deleted,omitempty"`
-	Pos       *PosMeta     `json:"pos,omitempty"` // positions only
+	Pos       *PosMeta     `json:"pos,omitempty"`  // positions only
+	Ends      []string     `json:"ends,omitempty"` // R&B lines only: [from id, to id]
 }
 
 // Position is a user's latest location, derived from their position object.
@@ -125,6 +135,8 @@ var (
 	ErrForeignItem = errors.New("item belongs to another team")
 	// ErrFolderInUse refuses deleting a personal or non-empty folder.
 	ErrFolderInUse = errors.New("folder is personal or not empty")
+	// ErrBadEnds refuses an R&B line whose ends don't exist (any more).
+	ErrBadEnds = errors.New("an R&B line needs two different existing waypoints or positions")
 	// ErrForbidden refuses an agent write outside its own folder.
 	ErrForbidden = errors.New("agents may only change objects in their own folder")
 )
@@ -393,16 +405,24 @@ func tombstonePositions(tx *sql.Tx, where string, arg any) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []Item
+	var ids []string
 	for rows.Next() {
 		it := Item{Kind: KindPosition, Deleted: true}
 		if err := rows.Scan(&it.ID, &it.CreatedBy, &it.UpdatedBy, &it.UpdatedAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, it)
+		ids = append(ids, it.ID)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// R&B lines to those positions go too.
+	lines, err := deleteRBLinesTo(tx, ids, "")
+	return append(out, lines...), err
 }
 
 func (s *Store) Users(teamID string) ([]PublicUser, error) {
@@ -433,6 +453,13 @@ func scanItem(row interface{ Scan(...any) error }, extra ...any) (Item, error) {
 	if err := row.Scan(dest...); err != nil {
 		return Item{}, err
 	}
+	if meta != "" && it.Kind == KindRBLine {
+		var m rbMeta
+		if err := json.Unmarshal([]byte(meta), &m); err != nil {
+			return Item{}, fmt.Errorf("item %s meta: %w", it.ID, err)
+		}
+		it.Ends = m.Ends
+	}
 	if meta != "" && it.Kind == KindPosition {
 		it.Pos = &PosMeta{}
 		if err := json.Unmarshal([]byte(meta), it.Pos); err != nil {
@@ -455,12 +482,35 @@ func scanItem(row interface{ Scan(...any) error }, extra ...any) (Item, error) {
 // A map object sent without a folder goes into the user's personal folder.
 // Agents may only write map objects inside their own folder (ErrForbidden).
 // A position object can only be written by its user, at their position id.
+// An R&B line needs both ends alive (ErrBadEnds).
 func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
+	it, ok, _, err := s.PutItemAll(teamID, in, by)
+	return it, ok, err
+}
+
+// PutItemAll is PutItem that also returns the tombstones of R&B lines that
+// were deleted because this change deleted one of their ends; broadcast them.
+func (s *Store) PutItemAll(teamID string, in Item, by User) (Item, bool, []Item, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Item{}, false, err
+		return Item{}, false, nil, err
 	}
 	defer tx.Rollback()
+	it, ok, err := putItem(tx, teamID, in, by)
+	if err != nil || !ok {
+		return it, ok, nil, err
+	}
+	var cascaded []Item
+	if it.Deleted && (it.Kind == KindWaypoint || it.Kind == KindPosition) {
+		if cascaded, err = deleteRBLinesTo(tx, []string{it.ID}, by.ID); err != nil {
+			return Item{}, false, nil, err
+		}
+	}
+	return it, ok, cascaded, tx.Commit()
+}
+
+func putItem(tx *sql.Tx, teamID string, in Item, by User) (Item, bool, error) {
+	var err error
 	in.UpdatedBy = by.ID
 	if in.Kind == KindFolder {
 		in.Folder = ""
@@ -509,6 +559,15 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 	if stale {
 		return cur, false, nil
 	}
+	if in.Kind == KindRBLine && !in.Deleted {
+		if cur.ID != "" && cur.Kind == KindRBLine {
+			in.Ends = cur.Ends // ends are fixed: delete and recreate to re-point
+		}
+		if err := checkEnds(tx, teamID, in.Ends); err != nil {
+			return cur, false, err
+		}
+		in.Coords = nil // geometry always comes from the ends
+	}
 	if in.Deleted && cur.Kind == KindFolder && !cur.Deleted {
 		var users, items int
 		if err := tx.QueryRow(`SELECT (SELECT count(*) FROM users WHERE folder_id = ?1),
@@ -528,6 +587,9 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 	if in.Pos != nil {
 		b, _ := json.Marshal(in.Pos)
 		meta = string(b)
+	} else if in.Kind == KindRBLine && !in.Deleted {
+		b, _ := json.Marshal(rbMeta{Ends: in.Ends})
+		meta = string(b)
 	}
 	_, err = tx.Exec(`INSERT INTO items (id, team_id, kind, name, color, remarks, coords, folder, created_by, updated_by, updated_at, deleted, meta)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -538,7 +600,52 @@ func (s *Store) PutItem(teamID string, in Item, by User) (Item, bool, error) {
 	if err != nil {
 		return Item{}, false, err
 	}
-	return in, true, tx.Commit()
+	return in, true, nil
+}
+
+// checkEnds: two different live waypoints or positions of the team.
+func checkEnds(tx *sql.Tx, teamID string, ends []string) error {
+	if len(ends) != 2 || ends[0] == ends[1] {
+		return ErrBadEnds
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT count(*) FROM items WHERE team_id = ? AND deleted = 0
+		AND kind IN ('waypoint', 'position') AND id IN (?, ?)`, teamID, ends[0], ends[1]).Scan(&n); err != nil {
+		return err
+	}
+	if n != 2 {
+		return ErrBadEnds
+	}
+	return nil
+}
+
+// deleteRBLinesTo deletes the live R&B lines that end at any of ids and
+// returns their tombstones.
+func deleteRBLinesTo(tx *sql.Tx, ids []string, by string) ([]Item, error) {
+	var out []Item
+	now := time.Now().UnixMilli()
+	for _, id := range ids {
+		rows, err := tx.Query(`UPDATE items SET deleted = 1, meta = '', updated_by = ?1, updated_at = max(updated_at + 1, ?2)
+			WHERE kind = 'rbline' AND deleted = 0
+			AND EXISTS (SELECT 1 FROM json_each(items.meta, '$.ends') WHERE value = ?3)
+			RETURNING id, created_by, updated_by, updated_at`, by, now, id)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			it := Item{Kind: KindRBLine, Deleted: true}
+			if err := rows.Scan(&it.ID, &it.CreatedBy, &it.UpdatedBy, &it.UpdatedAt); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, it)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) Items(teamID string) ([]Item, error) {

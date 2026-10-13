@@ -76,9 +76,19 @@
         <button class="fab" data-draw-kind="area" aria-label="Area" title="Area"><span data-icon="area"></span><span class="lbl">Area</span></button>
         <button class="fab" data-draw-kind="line" aria-label="Line" title="Line"><span data-icon="line"></span><span class="lbl">Line</span></button>
         <button class="fab" data-draw-kind="waypoint" aria-label="Waypoint" title="Waypoint"><span data-icon="point"></span><span class="lbl">Point</span></button>
+        <button class="fab" data-draw-kind="rbline" aria-label="Range and bearing line" title="R&amp;B line between two points"><span data-icon="rbline"></span><span class="lbl">R&amp;B</span></button>
       </div>
       <div class="draw-into"></div>
     </div></section>
+
+    <!-- R&B line: picking its two ends -->
+    <div id="rbctl" hidden>
+      <div id="rb-hint" class="hint"></div>
+      <div class="fan-row">
+        <button class="fab sm" data-rb="cancel" aria-label="Cancel"><span data-icon="x"></span><span class="lbl">Cancel</span></button>
+        <button class="fab sm" data-rb="me" aria-label="My position"><span data-icon="me"></span><span class="lbl">Me</span></button>
+      </div>
+    </div>
 
     <!-- Drawing controls (only while placing) -->
     <div id="drawctl" hidden>

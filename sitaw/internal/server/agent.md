@@ -97,6 +97,13 @@ curl -fsS -H "$H" -H 'Content-Type: application/json' -X POST $SITAW_API/objects
 
 - `kind`: `waypoint` (exactly 1 point), `line` (≥ 2 points), `area` (≥ 3
   points, closed automatically; don't repeat the first point).
+- `kind: "rbline"` is an **R&B line** (Range & Bearing, as in ATAK): a dashed
+  line between two existing objects that follows them when they move:
+  `{"kind":"rbline","ends":["BRAVO","<waypoint id>"],"name":"TO-RV"}`. `ends` are
+  two waypoint ids or member callsigns (their position). It has no `points` of
+  its own; responses include `points`, `lengthM`, `bearingGridDeg` and `ends`.
+  When either end is deleted (or a member's position becomes unknown), the line
+  is deleted automatically. Ends can't be changed; delete it and create a new one.
 - `kind: "position"` sets **your own position** (if you represent something
   with a location, e.g. a sensor): `{"kind":"position","points":["<pos>"]}`.
   There is one per member. Sending it again moves it, and `DELETE` means

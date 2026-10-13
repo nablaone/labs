@@ -133,7 +133,15 @@ type objectView struct {
 	ByAgent    bool        `json:"byAgent,omitempty"`
 	UpdatedAt  string      `json:"updatedAt"`
 	Link       string      `json:"link"`
-	DistanceM  *float64    `json:"distanceM,omitempty"` // set by near/nearby queries
+	Ends       []endView   `json:"ends,omitempty"`           // R&B lines: from, to
+	BearingDeg *float64    `json:"bearingGridDeg,omitempty"` // R&B lines: grid bearing from -> to
+	DistanceM  *float64    `json:"distanceM,omitempty"`      // set by near/nearby queries
+}
+
+type endView struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"` // waypoint or position
+	Name string `json:"name"` // waypoint name or member callsign
 }
 
 type folderView struct {
@@ -211,6 +219,23 @@ func (s *Server) loadTeam(r *http.Request, teamID string) (*teamData, error) {
 			d.folders[it.ID] = it
 		}
 	}
+	// R&B lines get their geometry from their ends; one whose end is missing
+	// is about to be deleted, so leave it out.
+	kept := d.items[:0]
+	for _, it := range d.items {
+		if it.Kind == store.KindRBLine {
+			a, okA := d.byID[it.Ends[0]]
+			b, okB := d.byID[it.Ends[1]]
+			if !okA || !okB || len(a.Coords) != 1 || len(b.Coords) != 1 {
+				delete(d.byID, it.ID)
+				continue
+			}
+			it.Coords = [][2]float64{a.Coords[0], b.Coords[0]}
+			d.byID[it.ID] = it
+		}
+		kept = append(kept, it)
+	}
+	d.items = kept
 	return d, nil
 }
 
@@ -251,6 +276,19 @@ func (d *teamData) object(it store.Item) objectView {
 	case store.KindArea:
 		ar := polygonArea(it.Coords)
 		v.AreaM2 = &ar
+	case store.KindRBLine:
+		l := pathLength(it.Coords)
+		a, b := it.Coords[0], it.Coords[1]
+		g := math.Round(math.Mod(geo.Bearing(a[0], a[1], b[0], b[1])-geo.GridConvergence(a[0], a[1])+360, 360)*10) / 10
+		v.LengthM, v.BearingDeg = &l, &g
+		for _, id := range it.Ends {
+			e := d.byID[id]
+			name := e.Name
+			if e.Kind == store.KindPosition {
+				name = d.callsign(e.CreatedBy)
+			}
+			v.Ends = append(v.Ends, endView{ID: id, Kind: e.Kind, Name: name})
+		}
 	}
 	return v
 }
@@ -637,7 +675,8 @@ type objectInput struct {
 	Remarks *string           `json:"remarks"`
 	Points  []json.RawMessage `json:"points"`
 	Folder  *string           `json:"folderId"`
-	Pos     *store.PosMeta    `json:"pos"` // positions: source, acc, hdg, spd, fix
+	Pos     *store.PosMeta    `json:"pos"`  // positions: source, acc, hdg, spd, fix
+	Ends    []string          `json:"ends"` // R&B lines: two object ids or callsigns
 }
 
 func parsePoints(raw []json.RawMessage) ([][2]float64, error) {
@@ -661,7 +700,36 @@ func parsePoints(raw []json.RawMessage) ([][2]float64, error) {
 	return out, nil
 }
 
-var defaultColor = map[string]string{store.KindWaypoint: "#e53935", store.KindLine: "#1e88e5", store.KindArea: "#fb8c00"}
+var defaultColor = map[string]string{store.KindWaypoint: "#e53935", store.KindLine: "#1e88e5", store.KindArea: "#fb8c00", store.KindRBLine: "#8e24aa"}
+
+// resolveEnds turns R&B line ends given as object ids or callsigns into ids
+// of waypoints or position objects.
+func (d *teamData) resolveEnds(ends []string) ([]string, error) {
+	if len(ends) != 2 {
+		return nil, errors.New(`ends: give exactly two, e.g. ["BRAVO", "<waypoint id>"]`)
+	}
+	out := make([]string, 2)
+	for i, e := range ends {
+		e = strings.TrimSpace(e)
+		if it, ok := d.byID[e]; ok && (it.Kind == store.KindWaypoint || it.Kind == store.KindPosition) {
+			out[i] = e
+			continue
+		}
+		found := false
+		for _, u := range d.users {
+			if strings.EqualFold(u.Callsign, e) {
+				if _, ok := d.byID[u.PositionID]; !ok {
+					return nil, fmt.Errorf("ends[%d]: %s has no position", i, u.Callsign)
+				}
+				out[i], found = u.PositionID, true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("ends[%d]: %q is not a waypoint id or a callsign with a position", i, e)
+		}
+	}
+	return out, nil
+}
 
 func (s *Server) handleAPICreate(w http.ResponseWriter, r *http.Request, u store.User) {
 	var in objectInput
@@ -670,7 +738,7 @@ func (s *Server) handleAPICreate(w http.ResponseWriter, r *http.Request, u store
 		return
 	}
 	if in.Kind == nil {
-		httpError(w, http.StatusBadRequest, "kind is required: waypoint, line or area")
+		httpError(w, http.StatusBadRequest, "kind is required: waypoint, line, area, rbline or position")
 		return
 	}
 	coords, err := parsePoints(in.Points)
@@ -679,6 +747,16 @@ func (s *Server) handleAPICreate(w http.ResponseWriter, r *http.Request, u store
 		return
 	}
 	it := store.Item{ID: store.NewUUID(), Kind: *in.Kind, Coords: coords, UpdatedAt: time.Now().UnixMilli()}
+	if it.Kind == store.KindRBLine {
+		d, ok := s.apiTeam(w, r, u)
+		if !ok {
+			return
+		}
+		if it.Ends, err = d.resolveEnds(in.Ends); err != nil {
+			httpError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if it.Kind == store.KindPosition {
 		// Your position has a fixed id; "creating" it sets it (manual by default).
 		it.ID = u.PositionID
@@ -778,14 +856,20 @@ func (s *Server) apiPut(w http.ResponseWriter, r *http.Request, u store.User, it
 	if !ok {
 		return
 	}
+	if fresh, ok := d.byID[stored.ID]; ok {
+		stored = fresh // with geometry filled in (R&B lines)
+	}
 	writeJSON(w, code, d.object(stored))
 }
 
 // putAndBroadcast stores a change through the same path as the WebSocket and
 // pushes it live to the team. It writes the error response itself.
 func (s *Server) putAndBroadcast(w http.ResponseWriter, u store.User, it store.Item) (store.Item, bool) {
-	stored, applied, err := s.store.PutItem(u.TeamID, it, u)
+	stored, applied, cascaded, err := s.store.PutItemAll(u.TeamID, it, u)
 	switch {
+	case errors.Is(err, store.ErrBadEnds):
+		httpError(w, http.StatusBadRequest, err.Error())
+		return stored, false
 	case errors.Is(err, store.ErrForbidden):
 		httpError(w, http.StatusForbidden, err.Error()+" (yours: "+u.FolderID+")")
 		return stored, false
@@ -800,5 +884,8 @@ func (s *Server) putAndBroadcast(w http.ResponseWriter, u store.User, it store.I
 		return stored, false
 	}
 	s.hub.broadcast(u.TeamID, msg{T: "item", Item: &stored})
+	for i := range cascaded {
+		s.hub.broadcast(u.TeamID, msg{T: "item", Item: &cascaded[i]})
+	}
 	return stored, true
 }

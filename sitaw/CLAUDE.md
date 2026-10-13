@@ -168,8 +168,17 @@ docs/FEATURES.md         roadmap, feature status, and what we won't build
 
 - The WebSocket protocol is documented at the top of `internal/server/ws.go`.
   Client and server must agree on it, so change both together.
-- Items are `waypoint | line | area | folder | position`, with coords as `[lat, lon]` pairs. A delete is a
-  **tombstone** (`deleted: true`), never a removal, so offline peers converge.
+- Items are `waypoint | line | area | folder | position | rbline`, with coords as `[lat, lon]` pairs.
+  A delete is a **tombstone** (`deleted: true`), never a removal, so offline peers converge.
+- **R&B lines** (`kind: "rbline"`, ATAK's "Range & Bearing Line") store only
+  `ends: [from id, to id]` (in `items.meta`), each a live waypoint or position
+  object, and no coords. Clients and the agent API compute geometry from the ends,
+  so the line follows them. The store refuses missing or dead ends (`ErrBadEnds`),
+  ends can't be re-pointed, and deleting an end (waypoint deleted, position
+  "unknown", user removed) cascades: `PutItemAll`/`tombstonePositions` delete the
+  lines and the server broadcasts the tombstones. Created via "R&B from me"
+  (waypoint and teammate details) or DRAW → R&B (tap the start, then the end;
+  your own marker, the ME button, waypoints and teammates all work as ends).
 - Conflicts are last-write-wins on `(updatedAt, updatedBy)`. The same comparison
   exists in `store.PutItem` and `newer()` in `sync.js`, and the two must match.
 - Clients stamp `updatedAt` with server-corrected time (the snapshot carries `now`).

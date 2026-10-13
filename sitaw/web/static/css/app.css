@@ -183,6 +183,9 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 #drawctl { position: absolute; z-index: 1001; left: 8px; right: 8px; bottom: calc(100px + var(--safe-b));
   display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
 #drawctl > * { pointer-events: auto; }
+#rbctl { position: absolute; z-index: 1001; left: 8px; right: 8px; bottom: calc(100px + var(--safe-b));
+  display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+#rbctl > * { pointer-events: auto; }
 .fan-row { display: flex; }
 .fan-row .fab + .fab { margin-left: calc(-1 * var(--line)); }
 .hint { background: var(--ink); color: var(--paper); padding: 6px 10px; font-size: 13px; font-weight: 700;
@@ -252,6 +255,7 @@ html[data-night] .prow .swatch-icon { color: inherit !important; } /* night: eve
 /* "1.24 km · 045°" along a line segment */
 .seg-label { position: absolute; white-space: nowrap; pointer-events: none; background: #fff; border: 1px solid #000;
   padding: 0 4px; font: 700 11px var(--font); color: #000; }
+.seg-label.rb { border-style: dashed; border-width: 2px; } /* R&B line label */
 html[data-night] .seg-label { background: #000; color: #ff3b30; border-color: #ff3b30; }
 .map-label .area-size { display: block; font-weight: 400; text-align: center; text-transform: none; } /* "ha", "km²" stay lowercase */
 .map-label { background: #fff; border: 1px solid #000; padding: 0 4px; font: 700 12px var(--font);

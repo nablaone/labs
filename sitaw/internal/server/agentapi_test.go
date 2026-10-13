@@ -326,3 +326,68 @@ func TestAgentPosition(t *testing.T) {
 		t.Fatalf("position not removed: %s", b)
 	}
 }
+
+// R&B lines over the live socket and the agent API: ends by callsign, live
+// cascade when an end goes away.
+func TestRBLineFlow(t *testing.T) {
+	ts, _, invite := setup(t)
+	tokA, _ := join(t, ts, invite, "probe")
+	tokB, _ := join(t, ts, invite, "bravo")
+	a := dial(t, ts, tokA)
+	snapA := read(t, a, "snapshot")
+	b := dial(t, ts, tokB)
+	snapB := read(t, b, "snapshot")
+	putPos(t, a, snapA.You.PositionID, 52.2297, 21.0122)
+	read(t, a, "ack")
+	putPos(t, b, snapB.You.PositionID, 52.2405, 21.0300)
+	read(t, b, "ack")
+
+	// Over the socket: probe -> bravo.
+	now := time.Now().UnixMilli()
+	lineID := "6f1c2c1e-0000-4000-8000-0000000000c1"
+	write(t, a, map[string]any{"t": "put", "item": map[string]any{"id": lineID, "kind": "rbline", "name": "TO-BRAVO",
+		"ends": []string{snapA.You.PositionID, snapB.You.PositionID}, "updatedAt": now}})
+	for ack := read(t, a, "ack"); ack.ID != lineID; ack = read(t, a, "ack") {
+	}
+	// A line to something that doesn't exist is refused with an error.
+	write(t, a, map[string]any{"t": "put", "item": map[string]any{"id": "6f1c2c1e-0000-4000-8000-0000000000c2", "kind": "rbline",
+		"ends": []string{snapA.You.PositionID, "6f1c2c1e-0000-4000-8000-0000000000ff"}, "updatedAt": now}})
+	if ack := read(t, a, "ack"); ack.Error == "" {
+		t.Fatalf("dangling line accepted: %+v", ack)
+	}
+
+	// The agent API shows it with geometry, length and bearing.
+	_, body := do(t, ts, "POST", "/api/agents", tokA, "")
+	ag := decode[createdAgent](t, body)
+	_, body = do(t, ts, "GET", "/api/v1/objects?kind=rbline", ag.Token, "")
+	ls := decode[[]map[string]any](t, body)
+	if len(ls) != 1 || ls[0]["name"] != "TO-BRAVO" || len(ls[0]["points"].([]any)) != 2 ||
+		ls[0]["lengthM"].(float64) < 1500 || ls[0]["bearingGridDeg"] == nil || len(ls[0]["ends"].([]any)) != 2 {
+		t.Fatalf("rbline view: %s", body)
+	}
+	// Agents create one by callsign.
+	code, body := do(t, ts, "POST", "/api/v1/objects", ag.Token, `{"kind":"rbline","ends":["bravo","probe"],"name":"AGENT-RB"}`)
+	if code != http.StatusCreated || decode[map[string]any](t, body)["folderName"] != "PROBE-ALPHA" {
+		t.Fatalf("agent rbline: %d %s", code, body)
+	}
+	if code, _ := do(t, ts, "POST", "/api/v1/objects", ag.Token, `{"kind":"rbline","ends":["bravo","nobody"]}`); code != 400 {
+		t.Fatalf("bad end: %d", code)
+	}
+
+	// Bravo's position goes "unknown": both lines to bravo are deleted for everyone.
+	write(t, b, map[string]any{"t": "put", "item": map[string]any{"id": snapB.You.PositionID, "kind": "position",
+		"deleted": true, "updatedAt": time.Now().UnixMilli() + 10}})
+	deleted := map[string]bool{}
+	for len(deleted) < 2 {
+		if m := read(t, a, "item"); m.Item.Kind == "rbline" && m.Item.Deleted {
+			deleted[m.Item.ID] = true
+		}
+	}
+	if !deleted[lineID] {
+		t.Fatalf("socket line not deleted: %v", deleted)
+	}
+	_, body = do(t, ts, "GET", "/api/v1/objects?kind=rbline", ag.Token, "")
+	if n := len(decode[[]map[string]any](t, body)); n != 0 {
+		t.Fatalf("%d lines left", n)
+	}
+}

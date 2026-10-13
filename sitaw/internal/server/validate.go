@@ -70,6 +70,15 @@ func validateItem(it *store.Item) error {
 		return nil
 	}
 	it.Pos = nil // only positions carry position metadata
+	if it.Kind == store.KindRBLine {
+		// Geometry comes from the two ends (the store checks they exist).
+		if len(it.Ends) != 2 || !idRe.MatchString(it.Ends[0]) || !idRe.MatchString(it.Ends[1]) || it.Ends[0] == it.Ends[1] {
+			return errors.New("an R&B line needs ends: [two different object ids]")
+		}
+		it.Coords = nil
+		return checkText(it)
+	}
+	it.Ends = nil // only R&B lines have ends
 	minPts := map[string]int{store.KindWaypoint: 1, store.KindLine: 2, store.KindArea: 3}[it.Kind]
 	if minPts == 0 {
 		return errors.New("bad kind")
@@ -82,6 +91,10 @@ func validateItem(it *store.Item) error {
 			return errors.New("bad coordinate")
 		}
 	}
+	return checkText(it)
+}
+
+func checkText(it *store.Item) error {
 	it.Name = strings.TrimSpace(it.Name)
 	if utf8.RuneCountInString(it.Name) > maxName || utf8.RuneCountInString(it.Remarks) > maxRemarks {
 		return errors.New("text too long")

@@ -10,7 +10,7 @@ import { Sync } from './sync.js';
 import { ItemsLayer, TeamLayer, SelfMarker, DEFAULT_COLORS, lineLength, polygonArea } from './layers.js';
 import { DrawTool } from './draw.js';
 import { MgrsGrid } from './mgrsgrid.js';
-import { formatCoord, formatDegrees, parseAnyCoord, formatDistance } from './coords.js';
+import { formatCoord, formatDegrees, parseAnyCoord, formatDistance, formatBearing, bearingGrid } from './coords.js';
 import { icon, hydrateIcons } from './icons.js';
 import * as db from './db.js';
 
@@ -21,9 +21,9 @@ const POS_HEARTBEAT = 30000;     // resend even when stationary
 const POS_MIN_MOVE = 5;          // meters
 const GPS_STALE = 30000;         // a fix older than this is shown as stale
 const COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5', '#8e24aa', '#000000', '#ffffff'];
-const KIND_LABEL = { waypoint: 'Waypoint', line: 'Line', area: 'Area', position: 'Position' };
-const KIND_PREFIX = { waypoint: 'WP', line: 'LN', area: 'AR' };
-const KIND_ICON = { waypoint: 'point', line: 'line', area: 'area', position: 'gps' };
+const KIND_LABEL = { waypoint: 'Waypoint', line: 'Line', area: 'Area', position: 'Position', rbline: 'R&B line' };
+const KIND_PREFIX = { waypoint: 'WP', line: 'LN', area: 'AR', rbline: 'RB' };
+const KIND_ICON = { waypoint: 'point', line: 'line', area: 'area', position: 'gps', rbline: 'rbline' };
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -179,9 +179,36 @@ function startApp(session) {
     const f = sync.items.get(prefs.drawFolder);
     return live(f) && isFolder(f) ? f.id : myFolder();
   };
-  const objectsIn = (fid) => sync.liveItems().filter((i) => !isFolder(i) && folderOf(i) === fid);
+  // An R&B line has no coordinates of its own: it runs between two objects
+  // (waypoints or positions). endPoint/rbEnds resolve them; null = an end is
+  // gone (the server deletes such lines; until then they are hidden).
+  const endPoint = (id) => {
+    const e = sync.items.get(id);
+    return live(e) && (e.kind === 'waypoint' || e.kind === 'position') && e.coords?.length ? e.coords[0] : null;
+  };
+  const rbEnds = (it) => {
+    const a = endPoint(it.ends?.[0]), b = endPoint(it.ends?.[1]);
+    return a && b ? [a, b] : null;
+  };
+  const geom = (it) => (it.kind === 'rbline' ? rbEnds(it) : it.coords);
+  // What an end is called: a waypoint's name or a member's callsign.
+  const endName = (id) => {
+    const e = sync.items.get(id);
+    if (!e) return '?';
+    return e.kind === 'position' ? (e.createdBy === me.id ? `${me.callsign} (me)` : author(e.createdBy)) : (e.name || 'Waypoint');
+  };
+  const objectsIn = (fid) => sync.liveItems().filter((i) => !isFolder(i) && folderOf(i) === fid && geom(i));
 
-  const items = new ItemsLayer(map, (id, latlng) => onItemTap(id, latlng), (it) => folderVisible(folderOf(it)));
+  const items = new ItemsLayer(map, (id, latlng) => onItemTap(id, latlng), (it) => folderVisible(folderOf(it)), rbEnds);
+  // Re-draw the R&B lines that end at an object that just changed.
+  function refreshRBLines(endId) {
+    for (const l of sync.liveItems()) {
+      if (l.kind === 'rbline' && l.ends?.includes(endId)) {
+        items.upsert(l);
+        if (l.id === selectedId) select(l);
+      }
+    }
+  }
 
   // Selected object: a yellow outline drawn just below the objects.
   map.createPane('selection').style.zIndex = 390;
@@ -192,12 +219,24 @@ function startApp(session) {
     selectedId = it && !isFolder(it) ? it.id : null;
     if (!selectedId) return;
     const style = { pane: 'selection', color: '#ffeb3b', opacity: 0.9, interactive: false };
-    if (it.coords.length === 1) L.circleMarker(it.coords[0], { ...style, radius: 24, weight: 5, fill: false }).addTo(selection);
-    else if (it.kind === 'line') L.polyline(it.coords, { ...style, weight: 14 }).addTo(selection);
-    else L.polygon(it.coords, { ...style, weight: 12, fill: false }).addTo(selection);
+    const c = geom(it);
+    if (!c) return;
+    if (c.length === 1) L.circleMarker(c[0], { ...style, radius: 24, weight: 5, fill: false }).addTo(selection);
+    else if (it.kind === 'line' || it.kind === 'rbline') L.polyline(c, { ...style, weight: 14 }).addTo(selection);
+    else L.polygon(c, { ...style, weight: 12, fill: false }).addTo(selection);
   }
-  const team = new TeamLayer(map, me.id, (uid) => openFrom(null, () => openUser(uid, false)));
-  const self = new SelfMarker(map, me.callsign);
+  const team = new TeamLayer(map, me.id, (uid) => {
+    if (rbPick) { rbPicked(sync.positions.get(uid)?.itemId); return; }
+    openFrom(null, () => openUser(uid, false));
+  });
+  // Tapping your own marker: picks you as an R&B end while picking, else
+  // opens your position (details + GPS/manual/unknown actions).
+  const self = new SelfMarker(map, me.callsign, () => {
+    if (rbPick) { rbPicked(myPositionId()); return; }
+    if (draw.active) { const m = myPosition(); if (m) draw.add(L.latLng(m.coords[0])); return; }
+    const m = myPosition();
+    if (m) openFrom(null, () => openItem(m.id, false));
+  });
   const grid = new MgrsGrid();
 
   const overlays = { grid, team: team.group };
@@ -288,6 +327,7 @@ function startApp(session) {
     if (it.id === selectedId) select(live(it) ? it : null);
     // A folder change can move many objects in or out of view.
     if (isFolder(it)) items.reset(sync.liveItems()); else items.upsert(it);
+    if (it.kind === 'waypoint' || it.kind === 'position') refreshRBLines(it.id);
     if (it.kind === 'position') {
       if (it.createdBy === me.id || it.id === myPositionId()) renderSelf();
       else if (it.deleted) team.remove(it.createdBy);
@@ -506,6 +546,7 @@ function startApp(session) {
     closeSheet();
     if (was === name) return;
     if (name === 'draw' && draw.active) { draw.cancel(); return; } // tap Draw again to abort
+    if (name === 'draw' && rbPick) { rbPick = null; showRBPick(); return; }
     const pop = $(`[data-pop="${name}"]`);
     const body = $('.pop-body', pop);
     openPop = name;
@@ -666,7 +707,7 @@ function startApp(session) {
     return out || '<div class="empty">Nothing found. Try a name, MGRS (34UDC1234) or lat, lon (52.23, 21.01).</div>';
   }
 
-  const anchor = (it) => it.coords.length === 1 ? L.latLng(it.coords[0]) : L.latLngBounds(it.coords).getCenter();
+  const anchor = (it) => { const c = geom(it); return c.length === 1 ? L.latLng(c[0]) : L.latLngBounds(c).getCenter(); };
   // Everyone in the team except you: the roster (people and active agents),
   // plus anyone only known from a position. Freshest positions first, then
   // members without one.
@@ -765,10 +806,12 @@ function startApp(session) {
   function focusItem(it, pop) {
     const h = map.getSize().y;
     const top = Math.min(pop && !pop.hidden ? pop.getBoundingClientRect().bottom + 16 : 60, h * 0.75);
-    const pts = it.coords.length === 1 ? [it.coords[0], it.coords[0]] : it.coords;
+    const c = geom(it);
+    if (!c) return;
+    const pts = c.length === 1 ? [c[0], c[0]] : c;
     map.fitBounds(L.latLngBounds(pts), {
       paddingTopLeft: [24, top], paddingBottomRight: [80, 90],
-      maxZoom: it.coords.length === 1 ? Math.max(map.getZoom(), 15) : 17,
+      maxZoom: c.length === 1 ? Math.max(map.getZoom(), 15) : 17,
     });
   }
 
@@ -976,6 +1019,7 @@ function startApp(session) {
   $('[data-pop="draw"]').addEventListener('click', (e) => {
     const kind = e.target.closest('[data-draw-kind]')?.dataset.drawKind;
     if (!kind) return;
+    if (kind === 'rbline') { startRBPick(); return; }
     closePops();
     draw.start(kind);
   });
@@ -990,6 +1034,10 @@ function startApp(session) {
 
   function onItemTap(id, latlng) {
     const it = sync.items.get(id);
+    if (rbPick) {
+      if (it?.kind === 'waypoint') rbPicked(id); else toast('Pick a waypoint, a teammate or ME');
+      return;
+    }
     if (draw.active) {
       // Tapping a waypoint snaps the vertex onto it; on a shape, use the tap point.
       draw.add(it?.kind === 'waypoint' ? L.latLng(it.coords[0]) : latlng);
@@ -1114,6 +1162,11 @@ function startApp(session) {
 
   function describe(it) {
     if (it.kind === 'position') return `${formatCoord(...it.coords[0])} · ${posSummary(it)}`;
+    if (it.kind === 'rbline') {
+      const c = rbEnds(it);
+      const rb = c ? ` · ${formatDistance(L.latLng(c[0]).distanceTo(c[1]))} · ${formatBearing(bearingGrid(c[0][0], c[0][1], c[1][0], c[1][1]))} grid` : '';
+      return `${endName(it.ends[0])} → ${endName(it.ends[1])}${rb}`;
+    }
     if (it.kind === 'waypoint') return formatCoord(...it.coords[0]);
     if (it.kind === 'line') return `${it.coords.length} pts · ${formatDistance(lineLength(it.coords))}`;
     const a = polygonArea(it.coords);
@@ -1139,18 +1192,71 @@ function startApp(session) {
         <button class="btn" data-a="zoom">Zoom</button>
         <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
       </div>
-      ${mine ? positionActions() : ''}`);
+      ${mine ? positionActions() : rbFromMeButton()}`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'zoom') { hideSheet(); zoomTo(it); }
       else if (a === 'link') copyLink();
       else if (a === 'retry') { startGps(); toast('Asking for location…'); }
+      else if (a === 'rb-from-me') createRBLine(myPositionId(), it.id);
       else if (positionAction(a)) {
         const now = myPosition();
         if (now) showPosition(now); else closeSheet();
       }
     };
   }
+
+  // ----- R&B lines -----
+  const rbFromMeButton = () => `<div class="row actions"><button class="btn" data-a="rb-from-me">${icon('rbline')} R&amp;B from me</button></div>`;
+
+  async function createRBLine(from, to) {
+    if (!endPoint(from)) { toast(from === myPositionId() ? 'Your position is unknown: set it first (tap GPS)' : 'Start point is gone'); return; }
+    if (!endPoint(to)) { toast('End point is gone'); return; }
+    if (from === to) { toast('Pick two different points'); return; }
+    const folder = drawTarget();
+    if (folder && !folderVisible(folder)) setFolderVisible(folder, true);
+    const n = sync.liveItems().filter((i) => i.kind === 'rbline').length + 1;
+    const it = await sync.putItem({ id: newId(), kind: 'rbline', ends: [from, to], coords: [], folder,
+      name: `${KIND_PREFIX.rbline}-${n}`, color: DEFAULT_COLORS.rbline, remarks: '' });
+    closePops();
+    openFrom(null, () => openItem(it.id, false));
+    toast(`R&B line ${endName(from)} → ${endName(to)}`);
+  }
+
+  // DRAW → R&B: tap the start, then the end (a waypoint, a teammate, or ME).
+  let rbPick = null; // null, or { from: id | null }
+  function startRBPick() {
+    rbPick = { from: null };
+    closePops();
+    showRBPick();
+  }
+  function showRBPick() {
+    const el = $('#rbctl');
+    el.hidden = !rbPick;
+    $('[data-fab="draw"]').classList.toggle('active', !!rbPick);
+    if (!rbPick) return;
+    $('#rb-hint').textContent = rbPick.from
+      ? `R&B from ${endName(rbPick.from)} · tap the end point`
+      : 'R&B · tap the start: a waypoint, a teammate or yourself';
+  }
+  function rbPicked(id) {
+    if (!rbPick) return false;
+    if (!endPoint(id)) { toast('That has no position'); return true; }
+    if (!rbPick.from) { rbPick.from = id; showRBPick(); return true; }
+    const from = rbPick.from;
+    rbPick = null;
+    showRBPick();
+    createRBLine(from, id);
+    return true;
+  }
+  L.DomEvent.disableClickPropagation($('#rbctl'));
+  $('#rbctl').addEventListener('click', (e) => {
+    const a = e.target.closest('[data-rb]')?.dataset.rb;
+    if (a === 'me') {
+      if (!myPosition()) { toast('Your position is unknown: set it first (tap GPS)'); return; }
+      rbPicked(myPositionId());
+    } else if (a === 'cancel') { rbPick = null; showRBPick(); }
+  });
 
   function showItem(id) {
     const it = sync.items.get(id);
@@ -1168,10 +1274,12 @@ function startApp(session) {
         <button class="btn" data-a="edit">Edit</button>
         <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
         <button class="btn danger" data-a="del">Delete</button>
-      </div>`);
+      </div>
+      ${it.kind === 'waypoint' ? rbFromMeButton() : ''}`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'zoom') { hideSheet(); zoomTo(it); }
+      else if (a === 'rb-from-me') createRBLine(myPositionId(), it.id);
       else if (a === 'link') copyLink();
       else if (a === 'edit') editItem(id);
       else if (a === 'del') confirmDelete(id);
@@ -1240,12 +1348,14 @@ function startApp(session) {
   }
 
   function zoomTo(it) {
-    if (it.coords.length === 1) map.setView(it.coords[0], Math.max(map.getZoom(), 15));
-    else map.fitBounds(L.latLngBounds(it.coords), { padding: [40, 40] });
+    const c = geom(it);
+    if (!c) return;
+    if (c.length === 1) map.setView(c[0], Math.max(map.getZoom(), 15));
+    else map.fitBounds(L.latLngBounds(c), { padding: [40, 40] });
   }
 
   function fitFolder(fid) {
-    const pts = objectsIn(fid).flatMap((i) => i.coords);
+    const pts = objectsIn(fid).flatMap((i) => geom(i));
     if (pts.length === 1) map.setView(pts[0], Math.max(map.getZoom(), 15));
     else if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 16 });
   }
@@ -1331,10 +1441,12 @@ function startApp(session) {
       <div class="row actions">
         ${p ? '<button class="btn" data-a="zoom">Zoom</button>' : ''}
         <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
-      </div>`);
+      </div>
+      ${p && uid !== me.id ? rbFromMeButton() : ''}`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
-      if (a === 'zoom') { hideSheet(); setFollow(false); map.setView([p.lat, p.lon], Math.max(map.getZoom(), 15)); }
+      if (a === 'rb-from-me') createRBLine(myPositionId(), p.itemId);
+      else if (a === 'zoom') { hideSheet(); setFollow(false); map.setView([p.lat, p.lon], Math.max(map.getZoom(), 15)); }
       else if (a === 'link') copyLink();
       else if (a === 'folder') openItem(fid, false);
     };

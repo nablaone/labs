@@ -18,7 +18,7 @@ changes**. Items are listed in order of priority; size is S (a day or so) or M (
 | 1 | **Navigate to** (object, person, MGRS) | A live line from you to the target with distance, bearing, ETA and a turn arrow; works offline ("Bloodhound" in ATAK) | M | [ ] |
 | 2 | **Team chat** | "Meet at RV-1", "running late". One channel per team over the existing socket, queued offline, unread badge | M | [ ] |
 | 3 | **Breadcrumbs / tracks** | A trail behind each marker, and "where was BRAVO in the last hour". Needs a retention decision (24 h? 7 days?) | M | [ ] |
-| 4 | **Range & bearing tool** | Tap two points (or person to object) for distance and bearing; reuses the line labels | S | [ ] |
+| 4 | **R&B lines** (range & bearing) | A dashed line between two waypoints/people that follows them, labelled with length and grid bearing; deleted when an end goes | S | [x] |
 | 5 | **Download map area** | Pre-fetch tiles (zoom 10–16) for an area before going out of signal | S | [ ] |
 | 6 | **Screen awake + heading** | Wake Lock while navigating; your marker shows which way you face | S | [ ] |
 
@@ -115,7 +115,7 @@ Status: `[x]` done, `[~]` partial, `[ ]` not started. Scope: **Done** (shipped),
 |---|---|---|---|
 | Go to (fly the map to a place) | Done | [x] | |
 | Navigate to (Bloodhound) | Roadmap #1 | [ ] | Distance, bearing, ETA, turn arrow |
-| Range & bearing tool | Roadmap #4 | [ ] | |
+| R&B line between waypoints / people | Done | [x] | Follows its ends; length + grid bearing; "R&B from me" or DRAW → R&B |
 | Routes with checkpoints | Roadmap #9 | [ ] | |
 | Elevation profile | Later | [ ] | |
 | Bullseye, digital pointer, viewshed | No | | |

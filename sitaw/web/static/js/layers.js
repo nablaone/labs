@@ -2,7 +2,7 @@
 
 import { formatDistance, formatArea, formatBearing, bearingGrid } from './coords.js';
 
-export const DEFAULT_COLORS = { waypoint: '#e53935', line: '#1e88e5', area: '#fb8c00' };
+export const DEFAULT_COLORS = { waypoint: '#e53935', line: '#1e88e5', area: '#fb8c00', rbline: '#8e24aa' };
 const STALE_MS = 5 * 60 * 1000;
 const LOST_MS = 30 * 60 * 1000;
 
@@ -19,14 +19,19 @@ const DETAIL_ZOOM = 13;      // a few km across on a phone
 const SEG_LABEL_MIN_PX = 110; // segment must be this long on screen to carry a label
 const AREA_LABEL_MIN_PX = 90; // shape must be this big on screen to show its area
 
+// R&B line: dashed, between two objects it follows (ends resolved by
+// ends(it) -> [[lat,lon],[lat,lon]] or null if an end is gone); the label in
+// the middle always shows name · length · grid bearing.
 export class ItemsLayer {
-  constructor(map, onSelect, visible = () => true) {
+  constructor(map, onSelect, visible = () => true, ends = () => null) {
     this.map = map;
     this.onSelect = onSelect;
     this.visible = visible;
+    this.ends = ends;
     this.groups = {
       area: L.layerGroup().addTo(map),
       line: L.layerGroup().addTo(map),
+      rbline: L.layerGroup().addTo(map),
       waypoint: L.layerGroup().addTo(map),
     };
     this.layers = new Map(); // id -> leaflet layer
@@ -54,7 +59,8 @@ export class ItemsLayer {
     this.remove(it.id);
     if (it.deleted || !this.groups[it.kind] || !this.visible(it)) return;
     const color = it.color || DEFAULT_COLORS[it.kind];
-    const ll = it.coords.map(([lat, lon]) => [lat, lon]);
+    const ll = it.kind === 'rbline' ? this.ends(it) : it.coords.map(([lat, lon]) => [lat, lon]);
+    if (!ll) return; // an R&B line whose end is gone (the server deletes it)
     const label = (layer, direction, offset) => it.name &&
       layer.bindTooltip(esc(it.name), { permanent: true, direction, offset, className: 'map-label' });
     let layer;
@@ -63,6 +69,8 @@ export class ItemsLayer {
       label(layer, 'right', [14, -13]);
     } else if (it.kind === 'line') {
       layer = this.line(it, ll, color, label);
+    } else if (it.kind === 'rbline') {
+      layer = this.rbLine(it, ll, color);
     } else {
       layer = L.polygon(ll, { color, weight: 4, fillOpacity: 0.2 });
       this.details.set(it.id, () => this.areaLabel(it, layer));
@@ -102,6 +110,19 @@ export class ItemsLayer {
         else if (!show && g.hasLayer(s.m)) g.removeLayer(s.m);
       }
     });
+    return g;
+  }
+
+  rbLine(it, [a, b], color) {
+    const g = L.featureGroup();
+    L.polyline([a, b], { color, weight: 4, dashArray: '10 8', lineCap: 'butt' }).addTo(g);
+    L.circleMarker(a, { radius: 5, weight: 2, color: '#000', fillColor: color, fillOpacity: 1 }).addTo(g);
+    const angle = this.screenAngle(a, b);
+    L.marker(b, { icon: arrowIcon(color, angle), keyboard: false }).addTo(g);
+    const text = [it.name, formatDistance(L.latLng(a).distanceTo(b)), formatBearing(bearingGrid(a[0], a[1], b[0], b[1]))]
+      .filter(Boolean).join(' · ');
+    L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+      { icon: segLabelIcon(text, angle, 'rb'), interactive: false, keyboard: false }).addTo(g);
     return g;
   }
 
@@ -145,11 +166,11 @@ function arrowIcon(color, angle) {
 }
 
 // Text centred on a segment, rotated along it (kept upright), just above it.
-function segLabelIcon(text, angle) {
+function segLabelIcon(text, angle, cls = '') {
   const upright = angle > 90 || angle < -90 ? angle + 180 : angle;
   return L.divIcon({
     className: '', iconSize: [0, 0], iconAnchor: [0, 0],
-    html: `<div class="seg-label" style="transform:translate(-50%,-50%) rotate(${upright}deg) translateY(-13px)">${esc(text)}</div>`,
+    html: `<div class="seg-label ${cls}" style="transform:translate(-50%,-50%) rotate(${upright}deg) translateY(-13px)">${esc(text)}</div>`,
   });
 }
 
@@ -222,13 +243,15 @@ function shortAge(ms) {
 
 // Your own position, labelled with your callsign like everyone else.
 export class SelfMarker {
-  constructor(map, callsign) {
+  // onSelect: called when you tap your own marker.
+  constructor(map, callsign, onSelect = () => {}) {
     this.callsign = callsign;
     this.acc = L.circle([0, 0], { radius: 1, color: '#1e88e5', weight: 1, fillOpacity: 0.1, interactive: false });
     this.marker = L.marker([0, 0], {
       icon: L.divIcon({ className: '', html: '<div class="self-icon"></div>', iconSize: [26, 26], iconAnchor: [13, 13] }),
-      interactive: false, zIndexOffset: 1000,
-    }).bindTooltip(esc(callsign), { permanent: true, direction: 'right', offset: [14, 0], className: 'map-label self-label' });
+      zIndexOffset: 1000,
+    }).bindTooltip(esc(callsign), { permanent: true, direction: 'right', offset: [14, 0], className: 'map-label self-label' })
+      .on('click', (e) => { L.DomEvent.stopPropagation(e); onSelect(); });
     this.map = map;
     this.shown = false;
   }

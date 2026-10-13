@@ -476,3 +476,77 @@ func TestAgents(t *testing.T) {
 		t.Fatalf("revoked agent should stay in roster: %+v", r)
 	}
 }
+
+func TestRBLines(t *testing.T) {
+	s := open(t)
+	team, inv := must2(s.CreateTeam("a"))
+	me, _, _, _ := s.Join(inv.Token, "probe")
+	other, _, _, _ := s.Join(inv.Token, "bravo")
+	now := time.Now().UnixMilli()
+	setPos(s, team.ID, me, 52.23, 21.01, now)
+	setPos(s, team.ID, other, 52.24, 21.02, now)
+	wp := must(func() (Item, error) {
+		it, _, err := s.PutItem(team.ID, Item{ID: NewUUID(), Kind: KindWaypoint, Coords: [][2]float64{{52.25, 21.0}}, UpdatedAt: now}, me)
+		return it, err
+	}())
+	line := func(ends ...string) (Item, bool, error) {
+		return s.PutItem(team.ID, Item{ID: NewUUID(), Kind: KindRBLine, Name: "RB", Ends: ends,
+			Coords: [][2]float64{{9, 9}}, UpdatedAt: now}, me)
+	}
+
+	// Me -> waypoint, me -> teammate: stored without coordinates.
+	l1, ok, err := line(me.PositionID, wp.ID)
+	if !ok || err != nil || len(l1.Ends) != 2 || l1.Coords != nil {
+		t.Fatalf("line to waypoint: %v %v %+v", ok, err, l1)
+	}
+	l2, _, err := line(me.PositionID, other.PositionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := map[string]Item{}
+	for _, it := range must(s.Items(team.ID)) {
+		stored[it.ID] = it
+	}
+	if got := stored[l1.ID]; got.Kind != KindRBLine || got.Ends[1] != wp.ID {
+		t.Fatalf("reloaded: %+v", got)
+	}
+
+	// Bad ends are refused.
+	for name, ends := range map[string][]string{
+		"same end twice": {wp.ID, wp.ID}, "unknown id": {wp.ID, NewUUID()}, "one end": {wp.ID},
+		"a line as an end": {wp.ID, l1.ID},
+	} {
+		if _, _, err := line(ends...); err != ErrBadEnds {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// Ends can't be re-pointed by an edit.
+	edit := l1
+	edit.Name, edit.Ends, edit.UpdatedAt = "RENAMED", []string{other.PositionID, wp.ID}, now+1
+	if got, _, _ := s.PutItem(team.ID, edit, me); got.Ends[0] != me.PositionID || got.Name != "RENAMED" {
+		t.Fatalf("re-point: %+v", got)
+	}
+
+	// Deleting the waypoint deletes the line to it (and only that line).
+	_, _, gone, err := s.PutItemAll(team.ID, Item{ID: wp.ID, Kind: KindWaypoint, Deleted: true, UpdatedAt: now + 5}, other)
+	if err != nil || len(gone) != 1 || gone[0].ID != l1.ID || !gone[0].Deleted {
+		t.Fatalf("cascade from waypoint: %v %+v", err, gone)
+	}
+	// A teammate's position going "unknown" deletes the line to them.
+	_, _, gone, _ = s.PutItemAll(team.ID, Item{ID: other.PositionID, Kind: KindPosition, Deleted: true, UpdatedAt: now + 6}, other)
+	if len(gone) != 1 || gone[0].ID != l2.ID {
+		t.Fatalf("cascade from position: %+v", gone)
+	}
+	// Removing a user removes their position and lines to it.
+	setPos(s, team.ID, other, 52.24, 21.02, now+7)
+	l3, _, _ := line(me.PositionID, other.PositionID)
+	_, gone, err = s.RemoveUser(other.ID)
+	if err != nil || len(gone) != 2 || gone[1].ID != l3.ID {
+		t.Fatalf("cascade from removal: %v %+v", err, gone)
+	}
+	for _, it := range must(s.Items(team.ID)) {
+		if it.Kind == KindRBLine && !it.Deleted {
+			t.Fatalf("line left behind: %+v", it)
+		}
+	}
+}
