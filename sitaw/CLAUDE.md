@@ -26,6 +26,12 @@ you ship something, and check the "Not doing" list before adding ATAK features.
   `web/static` is embedded into the binary with `go:embed`.
 - **Map**: OpenTopoMap is the default base layer; OSM is the alternative. Tile layers use
   `crossOrigin: true` so the service worker can cache non-opaque responses.
+- **MGRS grid** (`js/mgrsgrid.js`): zone and band lines, then 100 km, 10 km and 1 km
+  (no 100 m grid). It is computed for the view plus a margin, and lines are cut exactly
+  at the area and zone edges (bisection), so they reach the screen edges and meet at
+  zone boundaries. With 10 km and 1 km lines, km-in-square labels (`00`–`99`) sit
+  where lines cross the top (eastings) and left (northings) edges, recomputed on
+  every move and kept clear of the button column and the status box.
 - **Coordinates**: MGRS everywhere (`js/mgrs.js`, hand-written and tested by
   round-trip). All UI formatting goes through `js/coords.js` so other formats
   can be added later. Don't call `toMGRS` directly from UI code.

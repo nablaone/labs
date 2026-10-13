@@ -1,13 +1,19 @@
 // Leaflet layer drawing the MGRS grid for the current view. The spacing
-// follows the zoom: zone/band lines, then 100 km, 10 km, 1 km, 100 m.
+// follows the zoom: zone/band lines, then 100 km, 10 km, 1 km (no finer).
+// With the 10 km and 1 km grids, the km values within the 100 km square are
+// printed where lines meet the top edge (eastings) and the left edge
+// (northings), as on a printed map; they follow the map while panning.
+// The grid is computed for the view plus a margin, and each line is cut
+// exactly where it leaves that area or its UTM zone (found by bisection along
+// the line), so lines reach the screen edges and meet at zone boundaries.
 // Known limitation: the Norway/Svalbard zone exceptions are not drawn.
 
 import { toUTM, fromUTM, centralMeridian, square100k } from './mgrs.js';
 
-const STEPS = 24; // vertices per grid line inside a view
+const STEPS = 32; // vertices per grid line across the drawn area
+const MARGIN = 0.5; // draw this much beyond the view on each side (fraction of its size)
 
 function spacingForZoom(z) {
-  if (z >= 16) return 100;
   if (z >= 13) return 1000;
   if (z >= 10) return 10000;
   if (z >= 7) return 100000;
@@ -25,12 +31,17 @@ export const MgrsGrid = L.LayerGroup.extend({
       pane.style.pointerEvents = 'none';
     }
     this._renderer = L.canvas({ pane: 'mgrs', padding: 0.1 });
+    this._edge = L.DomUtil.create('div', 'mgrs-edge', map.getContainer());
     map.on('moveend', this._redraw, this);
+    map.on('move zoom resize', this._placeLabels, this);
     this._redraw();
   },
 
   onRemove(map) {
     map.off('moveend', this._redraw, this);
+    map.off('move zoom resize', this._placeLabels, this);
+    this._edge?.remove();
+    this._edge = null;
     this.clearLayers();
   },
 
@@ -44,7 +55,8 @@ export const MgrsGrid = L.LayerGroup.extend({
     const map = this._map;
     if (!map) return;
     this.clearLayers();
-    const b = map.getBounds();
+    this._lines = []; // {axis: 'E'|'N', text, pts} for the edge labels
+    const b = map.getBounds().pad(MARGIN);
     const south = Math.max(b.getSouth(), -80), north = Math.min(b.getNorth(), 84);
     const west = Math.max(b.getWest(), -180), east = Math.min(b.getEast(), 180);
     if (south >= north) return;
@@ -60,7 +72,7 @@ export const MgrsGrid = L.LayerGroup.extend({
     }
 
     const sp = spacingForZoom(z);
-    if (!sp) return;
+    if (!sp) { this._placeLabels(); return; }
     const style = { color: this.options.color, weight: sp >= 100000 ? 1.5 : 1, opacity: this.options.opacity };
 
     const z0 = Math.floor((west + 180) / 6) + 1, z1 = Math.min(Math.floor((east + 180) / 6) + 1, 60);
@@ -76,6 +88,45 @@ export const MgrsGrid = L.LayerGroup.extend({
         this._zone(zone, south, north, zw, ze, sp, style, z);
       }
     }
+    this._placeLabels();
+  },
+
+  // Puts the km labels where grid lines cross the top and left screen edges.
+  _placeLabels() {
+    const map = this._map, el = this._edge;
+    if (!map || !el) return;
+    const { x: w, y: h } = map.getSize();
+    // Keep clear of the button column (top right) and the status box (bottom left).
+    const xMax = w - 80, yMax = h - 170, minGap = 22;
+    const html = [];
+    let lastX = -1e9, lastY = -1e9;
+    const hits = [];
+    for (const l of this._lines ?? []) {
+      const p = l.pts.map((ll) => map.latLngToContainerPoint(ll));
+      for (let i = 1; i < p.length; i++) {
+        const [a, b] = [p[i - 1], p[i]];
+        if (l.axis === 'E' && (a.y - 0) * (b.y - 0) <= 0 && a.y !== b.y) {
+          const x = a.x + (b.x - a.x) * (0 - a.y) / (b.y - a.y);
+          if (x > 8 && x < xMax) hits.push({ axis: 'E', pos: x, text: l.text });
+        } else if (l.axis === 'N' && (a.x - 0) * (b.x - 0) <= 0 && a.x !== b.x) {
+          const y = a.y + (b.y - a.y) * (0 - a.x) / (b.x - a.x);
+          if (y > 8 && y < yMax) hits.push({ axis: 'N', pos: y, text: l.text });
+        }
+      }
+    }
+    hits.sort((a, b) => a.pos - b.pos);
+    for (const t of hits) {
+      if (t.axis === 'E') {
+        if (t.pos - lastX < minGap) continue;
+        lastX = t.pos;
+        html.push(`<span class="e" style="left:${t.pos.toFixed(1)}px">${t.text}</span>`);
+      } else {
+        if (t.pos - lastY < minGap) continue;
+        lastY = t.pos;
+        html.push(`<span class="n" style="top:${t.pos.toFixed(1)}px">${t.text}</span>`);
+      }
+    }
+    el.innerHTML = html.join('');
   },
 
   // Draws grid lines for one zone within [s,n] x [w,e] (degrees).
@@ -94,27 +145,49 @@ export const MgrsGrid = L.LayerGroup.extend({
     if ((maxE - minE) / sp > 200 || (maxN - minN) / sp > 200) return; // too dense
 
     const inBox = (p) => p.lat >= s - 1e-9 && p.lat <= n + 1e-9 && p.lon >= w - 1e-9 && p.lon <= e + 1e-9;
-    const clipped = (pts) => {
-      // Keep the runs of points inside the box; good enough at STEPS resolution.
-      const runs = [[]];
-      for (const p of pts) {
-        if (inBox(p)) runs[runs.length - 1].push([p.lat, p.lon]);
-        else if (runs[runs.length - 1].length) runs.push([]);
+    // Traces a grid line given by at(v) (v = northing or easting along it) for
+    // v in [v0, v1]: samples it, keeps the parts inside the box, and finds the
+    // exact point where it enters or leaves by bisecting between samples.
+    const trace = (at, v0, v1) => {
+      const edge = (vIn, vOut) => {
+        for (let k = 0; k < 24; k++) {
+          const mid = (vIn + vOut) / 2;
+          if (inBox(at(mid))) vIn = mid; else vOut = mid;
+        }
+        const p = at(vIn);
+        return [p.lat, p.lon];
+      };
+      const runs = [];
+      let run = null, prevV = v0, prevIn = false;
+      for (let i = 0; i <= STEPS; i++) {
+        const v = v0 + (v1 - v0) * i / STEPS;
+        const p = at(v);
+        const inside = inBox(p);
+        if (inside && !prevIn) { run = i ? [edge(v, prevV)] : []; runs.push(run); }
+        if (inside) run.push([p.lat, p.lon]);
+        if (!inside && prevIn) run.push(edge(prevV, v));
+        prevV = v; prevIn = inside;
       }
       return runs;
     };
 
+    // Lines a bit past the extent too, so none stops short at the box edge.
     const e0 = Math.ceil(minE / sp) * sp, n0 = Math.ceil(minN / sp) * sp;
-    const dN = (maxN - minN) / STEPS, dE = (maxE - minE) / STEPS;
+    const lo = (v) => v - (maxE - minE + maxN - minN) * 0.02, hi = (v) => v + (maxE - minE + maxN - minN) * 0.02;
+    // km within the 100 km square, two digits: easting 437 000 -> "37".
+    const km = (v) => String(Math.round(((v % 100000) + 100000) % 100000 / 1000) % 100).padStart(2, '0');
+    const label = sp <= 10000;
     for (let ee = e0; ee <= maxE; ee += sp) {
-      const pts = [];
-      for (let i = 0; i <= STEPS; i++) pts.push(fromUTM(zone, isSouth, ee, minN + dN * i));
-      for (const run of clipped(pts)) this._line(run, style);
+      for (const r of trace((v) => fromUTM(zone, isSouth, ee, v), lo(minN), hi(maxN))) {
+        this._line(r, style);
+        if (label) this._lines.push({ axis: 'E', text: km(ee), pts: r });
+      }
     }
     for (let nn = n0; nn <= maxN; nn += sp) {
-      const pts = [];
-      for (let i = 0; i <= STEPS; i++) pts.push(fromUTM(zone, isSouth, minE + dE * i, nn));
-      for (const run of clipped(pts)) this._line(run, style);
+      for (const r of trace((v) => fromUTM(zone, isSouth, v, nn), lo(minE), hi(maxE))) {
+        this._line(r, style);
+        if (label) this._lines.push({ axis: 'N', text: km(nn), pts: r });
+      }
     }
 
     // Label 100 km squares when they are big on screen.

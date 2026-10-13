@@ -273,6 +273,13 @@ html[data-night] .seg-label { background: #000; color: #ff3b30; border-color: #f
 html[data-night] .map-label { background: #000; color: #ff3b30; border-color: #ff3b30; }
 .map-label .age { text-transform: none; font-weight: 400; } /* "5h", not "5H" */
 .map-label.self-label { background: #1565c0; color: #fff; border-color: #000; } /* you */
+/* km numbers along the top and left edges, like a printed map's margins */
+.mgrs-edge { position: absolute; inset: 0; pointer-events: none; z-index: 450; }
+.mgrs-edge span { position: absolute; font: 700 11px var(--font); color: #000; background: rgba(255,255,255,.85);
+  padding: 0 2px; line-height: 14px; }
+.mgrs-edge .e { top: calc(2px + var(--safe-t)); transform: translateX(-50%); }
+.mgrs-edge .n { left: 2px; transform: translateY(-50%); }
+html[data-night] .mgrs-edge span { background: #000; color: #ff3b30; }
 .mgrs-label { font: 700 14px var(--font); color: #000; background: rgba(255,255,255,.85); padding: 0 3px;
   white-space: nowrap; transform: translate(-50%, -50%); }
 .self-icon { width: 24px; height: 24px; border-radius: 50%; background: #1565c0; border: 4px solid #fff; box-shadow: 0 0 0 2px #000; }
