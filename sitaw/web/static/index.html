@@ -71,15 +71,14 @@
     <section class="pop" data-pop="goto" hidden><div class="sheet-bar"><span class="bar-title">Go to</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
     <section class="pop" data-pop="objects" hidden><div class="sheet-bar"><span class="bar-title">Objects</span><button class="bar-btn" data-act="new-folder" aria-label="New folder" title="New folder"><span data-icon="folderPlus"></span>Folder</button><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
     <section class="pop" data-pop="agents" hidden><div class="sheet-bar"><span class="bar-title">Agents</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
-    <section class="pop" data-pop="draw" hidden><div class="sheet-bar"><span class="bar-title">Draw</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body">
-      <div class="fan-row">
-        <button class="fab" data-draw-kind="area" aria-label="Area" title="Area"><span data-icon="area"></span><span class="lbl">Area</span></button>
-        <button class="fab" data-draw-kind="line" aria-label="Line" title="Line"><span data-icon="line"></span><span class="lbl">Line</span></button>
-        <button class="fab" data-draw-kind="waypoint" aria-label="Waypoint" title="Waypoint"><span data-icon="point"></span><span class="lbl">Point</span></button>
-        <button class="fab" data-draw-kind="rbline" aria-label="Range and bearing line" title="R&amp;B line between two points"><span data-icon="rbline"></span><span class="lbl">R&amp;B</span></button>
-      </div>
-      <div class="draw-into"></div>
-    </div></section>
+    <!-- Draw: a tile column like the main one, with close on top -->
+    <section class="pop tiles" data-pop="draw" hidden>
+      <button class="fab" data-pop-close aria-label="Close" title="Close"><span data-icon="x"></span></button>
+      <button class="fab" data-draw-kind="waypoint" aria-label="Point"><span data-icon="point"></span><span class="lbl">Point</span></button>
+      <button class="fab" data-draw-kind="line" aria-label="Line"><span data-icon="line"></span><span class="lbl">Line</span></button>
+      <button class="fab" data-draw-kind="area" aria-label="Area"><span data-icon="area"></span><span class="lbl">Area</span></button>
+      <button class="fab" data-draw-kind="rbline" aria-label="R&amp;B line"><span data-icon="rbline"></span><span class="lbl">R&amp;B</span></button>
+    </section>
 
     <!-- Moving a waypoint from its edit form -->
     <div id="movectl" hidden>

@@ -557,9 +557,8 @@ function startApp(session) {
     if (name === 'objects') renderObjects(body);
     if (name === 'agents') renderAgents(body);
     if (name === 'info') { inviteErr = null; renderInfo(body); }
-    if (name === 'draw') $('.draw-into', pop).textContent = `New objects go to ${folderName(drawTarget())}`;
     pop.hidden = false;
-    body.scrollTop = 0;
+    if (body) body.scrollTop = 0; // tile-only menus (Draw) have no body
     markTiles();
   }
   $('#fab').addEventListener('click', (e) => {
