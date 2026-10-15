@@ -1300,7 +1300,7 @@ function startApp(session) {
         : `<div class="sub">${esc(KIND_LABEL[it.kind])} · ${esc(describe(it))}</div>`}
       <div class="sub">in <button class="folder-link" data-a="folder">${esc(folderName(fid))}</button></div>
       ${it.remarks ? `<p>${esc(it.remarks)}</p>` : ''}
-      <div class="sub">by ${esc(author(it.createdBy))} · ${new Date(it.updatedAt).toLocaleString()}</div>
+      <div class="sub">by ${esc(author(it.createdBy))} · ${formatDateTime(it.updatedAt)}</div>
       <div class="row actions">
         <button class="btn" data-a="zoom">Zoom</button>
         <button class="btn" data-a="edit">Edit</button>
@@ -1588,12 +1588,23 @@ function newId() {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+// Dates are yyyy-mm-dd, times 24-hour HH:mm, both in local time.
+const pad2 = (n) => String(n).padStart(2, '0');
+function formatDate(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function formatDateTime(ts) {
+  const d = new Date(ts);
+  return `${formatDate(ts)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 function ago(ts) {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return new Date(ts).toLocaleDateString();
+  return formatDate(ts);
 }
 
 // Calls fn(target) on a double tap or double click inside el (on elements

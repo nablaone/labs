@@ -35,6 +35,8 @@ you ship something, and check the "Not doing" list before adding ATAK features.
 - **Coordinates**: MGRS everywhere (`js/mgrs.js`, hand-written and tested by
   round-trip). All UI formatting goes through `js/coords.js` so other formats
   can be added later. Don't call `toMGRS` directly from UI code.
+- **Dates** are `yyyy-mm-dd`, times 24-hour `HH:mm`, local time (`formatDate`,
+  `formatDateTime` in app.js); never `toLocale*`. The API uses RFC 3339 UTC.
 - **Mobile first, map-first UI**: no bars. A column of labelled tiles in the
   **top-right** (Info, View, Go to, Objects, Draw, Agent), under a short hamburger
   that folds the column away (`prefs.menuFolded`, remembered per device). Opening one **hides the column**, and
