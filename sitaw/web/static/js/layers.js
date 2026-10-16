@@ -1,6 +1,7 @@
 // Rendering of shared items and team positions on the Leaflet map.
 
 import { formatDistance, formatArea, formatBearing, bearingGrid } from './coords.js';
+import { t } from './i18n.js';
 
 export const DEFAULT_COLORS = { waypoint: '#e53935', line: '#1e88e5', area: '#fb8c00', rbline: '#8e24aa' };
 const STALE_MS = 5 * 60 * 1000;
@@ -223,7 +224,7 @@ export class TeamLayer {
     // A hand-placed position doesn't go stale like a GPS fix; it says "manual".
     const state = manual ? 'manual' : age > LOST_MS ? 'lost' : age > STALE_MS ? 'stale' : '';
     m.setIcon(memberIcon(state));
-    const note = manual ? 'manual' : state ? shortAge(age) : '';
+    const note = manual ? t('pos.manual') : state ? shortAge(age) : '';
     m.setTooltipContent(esc(p.callsign) + (note ? ` <span class="age">· ${note}</span>` : ''));
   }
 
@@ -260,7 +261,7 @@ export class SelfMarker {
   update(lat, lon, acc, manual = false) {
     this.marker.setLatLng([lat, lon]);
     this.acc.setLatLng([lat, lon]).setRadius(manual ? 0 : acc || 1);
-    this.marker.setTooltipContent(esc(this.callsign) + (manual ? ' <span class="age">· manual</span>' : ''));
+    this.marker.setTooltipContent(esc(this.callsign) + (manual ? ` <span class="age">· ${t('pos.manual')}</span>` : ''));
     if (!this.shown) {
       this.acc.addTo(this.map);
       this.marker.addTo(this.map);

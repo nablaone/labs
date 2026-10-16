@@ -25,10 +25,10 @@
   <section id="join" class="screen" hidden>
     <form id="join-form" class="card">
       <h1>sitaw</h1>
-      <p id="join-msg">You were invited to join the team.</p>
-      <label for="callsign">Callsign</label>
+      <p id="join-msg" data-i18n="join.invited">You were invited to join the team.</p>
+      <label for="callsign" data-i18n="join.callsign">Callsign</label>
       <input id="callsign" name="callsign" maxlength="24" autocomplete="off" autocapitalize="characters" required>
-      <button type="submit" class="btn primary">Join</button>
+      <button type="submit" class="btn primary" data-i18n="join.submit">Join</button>
       <p id="join-err" class="err" hidden></p>
     </form>
   </section>
@@ -37,15 +37,15 @@
   <section id="login" class="screen" hidden>
     <div class="card">
       <h1>sitaw</h1>
-      <p id="login-msg">Checking the sign-in link…</p>
-      <button id="login-go" type="button" class="btn primary" hidden>Sign in</button>
+      <p id="login-msg" data-i18n="login.checking">Checking the sign-in link…</p>
+      <button id="login-go" type="button" class="btn primary" hidden data-i18n="login.submit">Sign in</button>
     </div>
   </section>
 
   <section id="noinvite" class="screen" hidden>
     <div class="card">
       <h1>sitaw</h1>
-      <p>You need an invitation link to use this app. Ask your team lead for one.</p>
+      <p data-i18n="noinvite">You need an invitation link to use this app. Ask your team lead for one.</p>
     </div>
   </section>
 
@@ -57,36 +57,36 @@
     <!-- Button column (top-right). Opening a menu hides it; the menu, and any
          panel opened from it, takes its place. -->
     <div id="fab">
-      <button class="fab fold" data-fold aria-label="Fold or unfold the menu" aria-expanded="true" title="Menu"><span data-icon="menu"></span></button>
-      <button class="fab" data-fab="info" aria-label="Info" title="Session info"><span data-icon="info"></span><span class="lbl">Info</span></button>
-      <button class="fab" data-fab="view" aria-label="View" title="View"><span data-icon="layers"></span><span class="lbl">View</span></button>
-      <button class="fab" data-fab="goto" aria-label="Go to" title="Go to"><span data-icon="navigate"></span><span class="lbl">Go to</span></button>
-      <button class="fab" data-fab="objects" aria-label="Objects" title="Objects"><span data-icon="folder"></span><span class="lbl">Obj</span></button>
-      <button class="fab" data-fab="draw" aria-label="Draw" title="Draw"><span data-icon="pencil"></span><span class="lbl">Draw</span></button>
-      <button class="fab" data-fab="agents" aria-label="Agents" title="AI agents"><span data-icon="robot"></span><span class="lbl">Agent</span></button>
+      <button class="fab fold" data-fold aria-label="Menu" aria-expanded="true" title="Menu" data-i18n-aria="tile.menu" data-i18n-title="tile.menu"><span data-icon="menu"></span></button>
+      <button class="fab" data-fab="info" aria-label="Info" data-i18n-aria="tile.info"><span data-icon="info"></span><span class="lbl" data-i18n="tile.info">Info</span></button>
+      <button class="fab" data-fab="view" aria-label="View" data-i18n-aria="tile.view"><span data-icon="layers"></span><span class="lbl" data-i18n="tile.view">View</span></button>
+      <button class="fab" data-fab="goto" aria-label="Go to" data-i18n-aria="tile.goto"><span data-icon="navigate"></span><span class="lbl" data-i18n="tile.goto">Go to</span></button>
+      <button class="fab" data-fab="objects" aria-label="Objects" data-i18n-aria="pop.objects"><span data-icon="folder"></span><span class="lbl" data-i18n="tile.obj">Obj</span></button>
+      <button class="fab" data-fab="draw" aria-label="Draw" data-i18n-aria="tile.draw"><span data-icon="pencil"></span><span class="lbl" data-i18n="tile.draw">Draw</span></button>
+      <button class="fab" data-fab="agents" aria-label="AI agents" data-i18n-aria="aria.agents"><span data-icon="robot"></span><span class="lbl" data-i18n="tile.agent">Agent</span></button>
     </div>
 
     <!-- Menus: same place as the column, header bar with title and close -->
-    <section class="pop" data-pop="info" hidden><div class="sheet-bar"><span class="bar-title">Info</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
-    <section class="pop" data-pop="view" hidden><div class="sheet-bar"><span class="bar-title">View</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
-    <section class="pop" data-pop="goto" hidden><div class="sheet-bar"><span class="bar-title">Go to</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
-    <section class="pop" data-pop="objects" hidden><div class="sheet-bar"><span class="bar-title">Objects</span><button class="bar-btn" data-act="new-folder" aria-label="New folder" title="New folder"><span data-icon="folderPlus"></span>Folder</button><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
-    <section class="pop" data-pop="agents" hidden><div class="sheet-bar"><span class="bar-title">Agents</span><button class="sheet-x" data-pop-close aria-label="Close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
+    <section class="pop" data-pop="info" hidden><div class="sheet-bar"><span class="bar-title" data-i18n="tile.info">Info</span><button class="sheet-x" data-pop-close aria-label="Close" data-i18n-aria="tile.close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
+    <section class="pop" data-pop="view" hidden><div class="sheet-bar"><span class="bar-title" data-i18n="tile.view">View</span><button class="sheet-x" data-pop-close aria-label="Close" data-i18n-aria="tile.close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
+    <section class="pop" data-pop="goto" hidden><div class="sheet-bar"><span class="bar-title" data-i18n="tile.goto">Go to</span><button class="sheet-x" data-pop-close aria-label="Close" data-i18n-aria="tile.close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
+    <section class="pop" data-pop="objects" hidden><div class="sheet-bar"><span class="bar-title" data-i18n="pop.objects">Objects</span><button class="bar-btn" data-act="new-folder" aria-label="New folder" data-i18n-aria="aria.newFolder"><span data-icon="folderPlus"></span><span data-i18n="pop.folder">Folder</span></button><button class="sheet-x" data-pop-close aria-label="Close" data-i18n-aria="tile.close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
+    <section class="pop" data-pop="agents" hidden><div class="sheet-bar"><span class="bar-title" data-i18n="pop.agents">Agents</span><button class="sheet-x" data-pop-close aria-label="Close" data-i18n-aria="tile.close"><span data-icon="x"></span></button></div><div class="pop-body"></div></section>
     <!-- Draw: a tile column like the main one, with close on top -->
     <section class="pop tiles" data-pop="draw" hidden>
-      <button class="fab" data-pop-close aria-label="Close" title="Close"><span data-icon="x"></span></button>
-      <button class="fab" data-draw-kind="waypoint" aria-label="Point"><span data-icon="point"></span><span class="lbl">Point</span></button>
-      <button class="fab" data-draw-kind="line" aria-label="Line"><span data-icon="line"></span><span class="lbl">Line</span></button>
-      <button class="fab" data-draw-kind="area" aria-label="Area"><span data-icon="area"></span><span class="lbl">Area</span></button>
-      <button class="fab" data-draw-kind="rbline" aria-label="R&amp;B line"><span data-icon="rbline"></span><span class="lbl">R&amp;B</span></button>
+      <button class="fab" data-pop-close aria-label="Close" data-i18n-aria="tile.close"><span data-icon="x"></span></button>
+      <button class="fab" data-draw-kind="waypoint" aria-label="Point" data-i18n-aria="tile.point"><span data-icon="point"></span><span class="lbl" data-i18n="tile.point">Point</span></button>
+      <button class="fab" data-draw-kind="line" aria-label="Line" data-i18n-aria="tile.line"><span data-icon="line"></span><span class="lbl" data-i18n="tile.line">Line</span></button>
+      <button class="fab" data-draw-kind="area" aria-label="Area" data-i18n-aria="tile.area"><span data-icon="area"></span><span class="lbl" data-i18n="tile.area">Area</span></button>
+      <button class="fab" data-draw-kind="rbline" aria-label="R&amp;B line" data-i18n-aria="aria.rbline"><span data-icon="rbline"></span><span class="lbl" data-i18n="tile.rb">R&amp;B</span></button>
     </section>
 
     <!-- Moving a waypoint from its edit form -->
     <div id="movectl" hidden>
       <div id="move-hint" class="hint"></div>
       <div class="fan-row">
-        <button class="fab sm" data-move="cancel" aria-label="Cancel"><span data-icon="x"></span><span class="lbl">Cancel</span></button>
-        <button class="fab sm ok" data-move="done" aria-label="Done"><span data-icon="check"></span><span class="lbl">Done</span></button>
+        <button class="fab sm" data-move="cancel" aria-label="Cancel" data-i18n-aria="tile.cancel"><span data-icon="x"></span><span class="lbl" data-i18n="tile.cancel">Cancel</span></button>
+        <button class="fab sm ok" data-move="done" aria-label="Done" data-i18n-aria="tile.done"><span data-icon="check"></span><span class="lbl" data-i18n="tile.done">Done</span></button>
       </div>
     </div>
 
@@ -94,8 +94,8 @@
     <div id="rbctl" hidden>
       <div id="rb-hint" class="hint"></div>
       <div class="fan-row">
-        <button class="fab sm" data-rb="cancel" aria-label="Cancel"><span data-icon="x"></span><span class="lbl">Cancel</span></button>
-        <button class="fab sm" data-rb="me" aria-label="My position"><span data-icon="me"></span><span class="lbl">Me</span></button>
+        <button class="fab sm" data-rb="cancel" aria-label="Cancel" data-i18n-aria="tile.cancel"><span data-icon="x"></span><span class="lbl" data-i18n="tile.cancel">Cancel</span></button>
+        <button class="fab sm" data-rb="me" aria-label="My position" data-i18n-aria="aria.myPos"><span data-icon="me"></span><span class="lbl" data-i18n="tile.me">Me</span></button>
       </div>
     </div>
 
@@ -103,10 +103,10 @@
     <div id="drawctl" hidden>
       <div id="draw-hint" class="hint"></div>
       <div class="fan-row">
-        <button class="fab sm" data-draw="cancel" aria-label="Cancel" title="Cancel"><span data-icon="x"></span><span class="lbl">Cancel</span></button>
-        <button class="fab sm" data-draw="undo" aria-label="Undo" title="Undo"><span data-icon="undo"></span><span class="lbl">Undo</span></button>
-        <button class="fab" data-draw="center" aria-label="Add point at crosshair" title="Add at crosshair"><span data-icon="plus"></span><span class="lbl">Add ✛</span></button>
-        <button class="fab sm ok" data-draw="done" aria-label="Done" title="Done"><span data-icon="check"></span><span class="lbl">Done</span></button>
+        <button class="fab sm" data-draw="cancel" aria-label="Cancel" data-i18n-aria="tile.cancel"><span data-icon="x"></span><span class="lbl" data-i18n="tile.cancel">Cancel</span></button>
+        <button class="fab sm" data-draw="undo" aria-label="Undo" data-i18n-aria="tile.undo"><span data-icon="undo"></span><span class="lbl" data-i18n="tile.undo">Undo</span></button>
+        <button class="fab" data-draw="center" aria-label="Add point at crosshair" data-i18n-aria="aria.addCrosshair"><span data-icon="plus"></span><span class="lbl" data-i18n="tile.add">Add ✛</span></button>
+        <button class="fab sm ok" data-draw="done" aria-label="Done" data-i18n-aria="tile.done"><span data-icon="check"></span><span class="lbl" data-i18n="tile.done">Done</span></button>
       </div>
     </div>
 

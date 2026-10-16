@@ -13,6 +13,7 @@ import { MgrsGrid } from './mgrsgrid.js';
 import { formatCoord, formatDegrees, parseAnyCoord, formatDistance, formatBearing, bearingGrid } from './coords.js';
 import { icon, hydrateIcons } from './icons.js';
 import * as db from './db.js';
+import { t, errText, translateDom, setLang, getLang, LANGS } from './i18n.js';
 
 const SESSION_KEY = 'sitaw.session';
 const PREFS_KEY = 'sitaw.view';
@@ -21,11 +22,11 @@ const POS_HEARTBEAT = 30000;     // resend even when stationary
 const POS_MIN_MOVE = 5;          // meters
 const GPS_STALE = 30000;         // a fix older than this is shown as stale
 const COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5', '#8e24aa', '#000000', '#ffffff'];
-const KIND_LABEL = { waypoint: 'Waypoint', line: 'Line', area: 'Area', position: 'Position', rbline: 'R&B line' };
 const KIND_PREFIX = { waypoint: 'WP', line: 'LN', area: 'AR', rbline: 'RB' };
 const KIND_ICON = { waypoint: 'point', line: 'line', area: 'area', position: 'gps', rbline: 'rbline' };
 
 const $ = (sel, root = document) => root.querySelector(sel);
+const kindLabel = (k) => t(`kind.${k}`);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // ---------- session / join ----------
@@ -53,10 +54,10 @@ async function showJoin(invite, session) {
     return;
   }
   if (team) {
-    msg.innerHTML = `Join team <b>${esc(team.name)}</b>.`;
-    if (session) msg.innerHTML += ` This device is in team <b>${esc(session.team?.name ?? '?')}</b> now; joining signs you out of it.`;
+    msg.innerHTML = t('join.team', { team: esc(team.name) });
+    if (session) msg.innerHTML += ` ${t('join.switch', { team: esc(session.team?.name ?? '?') })}`;
   } else if (navigator.onLine) {
-    msg.textContent = 'This invite link is invalid or has expired. Ask your team lead for a new one.';
+    msg.textContent = t('join.invalid');
     $('#join-form').querySelector('button').disabled = true;
   }
   $('#join-form').addEventListener('submit', async (e) => {
@@ -70,12 +71,12 @@ async function showJoin(invite, session) {
         body: JSON.stringify({ invite, callsign: $('#callsign').value }),
       });
       const body = await r.json();
-      if (!r.ok) throw new Error(body.error || r.statusText);
+      if (!r.ok) throw Object.assign(new Error(body.error || r.statusText), { code: body.code });
       await db.wipe();
       localStorage.setItem(SESSION_KEY, JSON.stringify(body));
       location.replace('/');
     } catch (ex) {
-      err.textContent = navigator.onLine ? ex.message : 'You are offline. Joining needs a connection.';
+      err.textContent = navigator.onLine ? errText(ex) : t('join.offline');
       err.hidden = false;
     }
   });
@@ -166,7 +167,7 @@ function startApp(session) {
     if (live(f) && isFolder(f)) return it.folder;
     return sync.users.get(it.createdBy)?.folderId ?? it.folder ?? '';
   };
-  const folderName = (fid) => sync.items.get(fid)?.name ?? 'Unknown folder';
+  const folderName = (fid) => sync.items.get(fid)?.name ?? t('folder.unknown');
   // By default you see your own objects only: your folder, folders you made,
   // and the folders of your agents.
   const folderVisible = (fid) => prefs.folders[fid] ??
@@ -196,7 +197,7 @@ function startApp(session) {
   const endName = (id) => {
     const e = sync.items.get(id);
     if (!e) return '?';
-    return e.kind === 'position' ? (e.createdBy === me.id ? `${me.callsign} (me)` : author(e.createdBy)) : (e.name || 'Waypoint');
+    return e.kind === 'position' ? (e.createdBy === me.id ? t('me.suffix', { callsign: me.callsign }) : author(e.createdBy)) : (e.name || kindLabel('waypoint'));
   };
   const objectsIn = (fid) => sync.liveItems().filter((i) => !isFolder(i) && folderOf(i) === fid && geom(i));
 
@@ -278,9 +279,9 @@ function startApp(session) {
   }
   const updateServer = () => {
     const n = sync.pendingCount;
-    const q = n ? ` · ${n} queued` : '';
-    if (sync.online) setStatus($('#srv-st'), n ? 'warn' : 'ok', 'cloud', `live${q}`);
-    else setStatus($('#srv-st'), 'bad', 'cloudOff', `offline${q}`);
+    const q = n ? ` · ${t('st.queued', { n })}` : '';
+    if (sync.online) setStatus($('#srv-st'), n ? 'warn' : 'ok', 'cloud', `${t('st.live')}${q}`);
+    else setStatus($('#srv-st'), 'bad', 'cloudOff', `${t('st.offline')}${q}`);
   };
   // Re-render an open popover when the data behind it changes.
   const refreshPop = () => {
@@ -289,6 +290,14 @@ function startApp(session) {
     if (openPop === 'agents') renderAgents($('[data-pop="agents"] .pop-body'));
     if (openPop === 'info') renderInfo($('[data-pop="info"] .pop-body'));
   };
+  // A new language re-renders what is on screen; nothing reloads.
+  function changeLang(l) {
+    setLang(l);
+    updateServer();
+    updateGps();
+    refreshPop();
+    renderPositions(); // tooltips
+  }
   sync.addEventListener('status', updateServer);
   sync.addEventListener('reset', (e) => {
     items.reset(e.detail.items);
@@ -302,7 +311,7 @@ function startApp(session) {
     if (final && r?.kind === 'item' && !live(sync.items.get(r.id))) {
       hideSheet();
       history.replaceState(null, '', '/');
-      toast('That object is not part of your team (or was deleted)');
+      toast(t('toast.notFound'));
     }
   });
   sync.addEventListener('you', (e) => {
@@ -362,9 +371,9 @@ function startApp(session) {
     renderSelf();
   }
   sync.addEventListener('leave', (e) => team.remove(e.detail.userId));
-  sync.addEventListener('rejected', (e) => toast(`Not saved: ${e.detail.error}`));
+  sync.addEventListener('rejected', (e) => toast(t('toast.notSaved', { error: errText({ code: e.detail.code, message: e.detail.error }) })));
   sync.addEventListener('unauthorized', () => {
-    toast('Your session is no longer valid.');
+    toast(t('toast.signedOut'));
     setTimeout(leave, 2000);
   });
   sync.start();
@@ -374,12 +383,12 @@ function startApp(session) {
   let follow = false, lastFix = null, lastSent = null, gpsError = null, gpsDetail = '', gpsWatch = null;
   const updateGps = () => {
     const el = $('#gps-st');
-    if (prefs.posMode === 'manual') setStatus(el, myPosition() ? 'warn' : 'bad', 'gps', myPosition() ? 'manual position' : 'position unknown');
-    else if (prefs.posMode === 'off') setStatus(el, 'bad', 'gps', 'position unknown');
-    else if (gpsError) setStatus(el, 'bad', 'gps', gpsError);
-    else if (!lastFix) setStatus(el, 'warn', 'gps', 'GPS…');
-    else if (Date.now() - lastFix.ts > GPS_STALE) setStatus(el, 'warn', 'gps', `GPS ${ago(lastFix.ts)}`);
-    else setStatus(el, 'ok', 'gps', `±${Math.round(lastFix.acc)} m${follow ? ' · follow' : ''}`);
+    if (prefs.posMode === 'manual') setStatus(el, myPosition() ? 'warn' : 'bad', 'gps', t(myPosition() ? 'gps.manual' : 'gps.unknown'));
+    else if (prefs.posMode === 'off') setStatus(el, 'bad', 'gps', t('gps.unknown'));
+    else if (gpsError) setStatus(el, 'bad', 'gps', t(gpsError));
+    else if (!lastFix) setStatus(el, 'warn', 'gps', t('gps.wait'));
+    else if (Date.now() - lastFix.ts > GPS_STALE) setStatus(el, 'warn', 'gps', t('gps.stale', { ago: ago(lastFix.ts) }));
+    else setStatus(el, 'ok', 'gps', `±${Math.round(lastFix.acc)} m${follow ? ` · ${t('gps.follow')}` : ''}`);
   };
   const setFollow = (on) => {
     follow = on;
@@ -405,26 +414,28 @@ function startApp(session) {
     }
   };
   // Why GPS fails, in words a user can act on. The status shows the short
-  // form; tapping it opens the explanation (gpsDetail) with a Retry button.
-  function gpsFailed(short, detail) {
-    gpsError = short;
-    gpsDetail = detail;
+  // form (gpsError, a string key); tapping it opens the explanation (key
+  // + '.d', plus what the browser said) with a Retry button.
+  function gpsFailed(key, said = '') {
+    gpsError = key;
+    gpsDetail = said;
     updateGps();
   }
+  const gpsHelpText = () => (gpsError
+    ? t(`${gpsError}.d`, { origin: location.origin }) + (gpsDetail ? ` ${t('gps.browserSaid', { msg: gpsDetail })}` : '')
+    : t(lastFix ? 'gps.ok' : 'gps.waiting'));
   function startGps() {
     if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
     gpsWatch = null;
     gpsError = null;
     if (!('geolocation' in navigator)) {
-      gpsFailed('no GPS', 'This browser has no location support.');
+      gpsFailed('gps.none');
       return;
     }
     if (!window.isSecureContext) {
       // Browsers only give location to https:// pages (and localhost); on plain
       // http they refuse silently, without asking.
-      gpsFailed('GPS needs HTTPS', `This page is opened over plain HTTP (${location.origin}). Browsers only share ` +
-        'location with HTTPS pages. Open sitaw through an https:// address (see the README: a reverse proxy ' +
-        'such as Caddy, or a tunnel such as cloudflared or Tailscale).');
+      gpsFailed('gps.https');
       return;
     }
     gpsWatch = navigator.geolocation.watchPosition((p) => {
@@ -440,17 +451,10 @@ function startApp(session) {
       sendFix(false);
       updateGps();
     }, (err) => {
-      const said = err.message ? ` (Browser: "${err.message}")` : '';
-      if (err.code === err.PERMISSION_DENIED) {
-        gpsFailed('GPS denied', 'Location permission is blocked for this site. Allow it in the browser: tap the ' +
-          'icon left of the address → Permissions/Site settings → Location → Allow. Also check that the ' +
-          'browser app itself may use location (phone Settings → Apps/Privacy → Location). Then tap Retry.' + said);
-      } else if (err.code === err.POSITION_UNAVAILABLE) {
-        gpsFailed('GPS off?', 'The phone could not get a position. Turn on Location in the phone settings ' +
-          '(quick settings panel), and try outdoors or near a window. Then tap Retry.' + said);
-      } else {
-        gpsFailed('GPS timeout', 'No position arrived in time. Try outdoors or near a window, then tap Retry.' + said);
-      }
+      const said = err.message ?? '';
+      if (err.code === err.PERMISSION_DENIED) gpsFailed('gps.denied', said);
+      else if (err.code === err.POSITION_UNAVAILABLE) gpsFailed('gps.off', said);
+      else gpsFailed('gps.timeout', said);
     }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 });
   }
   startGps();
@@ -460,19 +464,18 @@ function startApp(session) {
 
   function showGpsHelp() {
     const mine = myPosition();
-    const mode = { gps: 'GPS updates your position', manual: 'Set by hand (GPS ignored)', off: 'Location unknown' }[prefs.posMode];
     const s = openSheet(`
-      <h2>${icon('gps')} My position</h2>
-      <div class="sub">${mine ? `${esc(formatCoord(mine.coords[0][0], mine.coords[0][1]))} · ${esc(posSummary(mine))}` : 'No position: the team does not see you'}</div>
-      <div class="sub">Mode: <b>${esc(mode)}</b></div>
-      <h4 class="sheet-h4">GPS on this device</h4>
+      <h2>${icon('gps')} ${t('pos.title')}</h2>
+      <div class="sub">${mine ? `${esc(formatCoord(mine.coords[0][0], mine.coords[0][1]))} · ${esc(posSummary(mine))}` : t('pos.none')}</div>
+      <div class="sub">${t('pos.mode')}: <b>${t(`pos.mode.${prefs.posMode}`)}</b></div>
+      <h4 class="sheet-h4">${t('pos.device')}</h4>
       <div class="sub">${lastFix && !gpsError ? `${esc(formatCoord(lastFix.lat, lastFix.lon))} · ±${Math.round(lastFix.acc)} m · ${ago(lastFix.ts)}`
-        : esc(gpsError ?? 'Waiting for the first fix…')}</div>
-      <p>${esc(gpsDetail || (gpsError ? '' : lastFix ? 'GPS is working.' : 'Waiting for the phone to report a position. Outdoors this usually takes a few seconds.'))}</p>
+        : t(gpsError ?? 'gps.firstFix')}</div>
+      <p>${esc(gpsHelpText())}</p>
       ${positionActions()}`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
-      if (a === 'retry') { startGps(); toast('Asking for location…'); }
+      if (a === 'retry') startGps();
       else if (!positionAction(a)) return;
       showGpsHelp();
     };
@@ -483,32 +486,30 @@ function startApp(session) {
   function positionActions() {
     const mine = myPosition();
     return `<div class="row actions">
-      <button class="btn" data-a="manual">${icon('me')} Set at crosshair</button>
-      ${prefs.posMode !== 'gps' ? '<button class="btn primary" data-a="use-gps">Use GPS</button>' : '<button class="btn" data-a="retry">Retry GPS</button>'}
-      ${mine ? '<button class="btn danger" data-a="unknown">Unknown</button>' : ''}
+      <button class="btn" data-a="manual">${icon('me')} ${t('pos.setCrosshair')}</button>
+      ${prefs.posMode !== 'gps' ? `<button class="btn primary" data-a="use-gps">${t('pos.useGps')}</button>` : `<button class="btn" data-a="retry">${t('pos.retryGps')}</button>`}
+      ${mine ? `<button class="btn danger" data-a="unknown">${t('pos.unknownBtn')}</button>` : ''}
     </div>`;
   }
   function positionAction(a) {
     if (a === 'manual') {
-      if (!myPositionId()) { toast('Not connected yet'); return true; }
+      if (!myPositionId()) return true; // not connected yet
       const c = map.getCenter();
       prefs.posMode = 'manual';
       savePrefs(prefs);
       writePosition('manual', { lat: c.lat, lon: c.lng });
       setFollow(false);
-      toast('Position set at the crosshair · GPS ignored until USE GPS');
     } else if (a === 'use-gps') {
       prefs.posMode = 'gps';
       savePrefs(prefs);
       lastSent = null;
       const fresh = lastFix && Date.now() - lastFix.ts < GPS_STALE;
       startGps(); // re-ask: permission or settings may have changed meanwhile
-      if (fresh) sendFix(true); else toast('Waiting for GPS…');
+      if (fresh) sendFix(true);
     } else if (a === 'unknown') {
       prefs.posMode = 'off';
       savePrefs(prefs);
       if (myPosition()) sync.deleteItem(myPositionId());
-      toast('Position removed · the team sees you as unknown');
     } else return false;
     updateGps();
     return true;
@@ -516,14 +517,14 @@ function startApp(session) {
 
   function posSummary(it) {
     const p = it.pos ?? {};
-    const src = p.source === 'manual' ? 'manual' : `GPS${p.acc ? ` ±${Math.round(p.acc)} m` : ''}`;
+    const src = p.source === 'manual' ? t('pos.manual') : `GPS${p.acc ? ` ±${Math.round(p.acc)} m` : ''}`;
     return `${src} · ${ago(p.fix ?? it.updatedAt)}`;
   }
   map.on('dragstart', () => { if (follow) setFollow(false); });
 
   function goToMe() {
     const mine = myPosition();
-    if (!mine) { toast(prefs.posMode === 'gps' ? (gpsError ?? 'Waiting for GPS…') : 'Position unknown: set it in the GPS panel'); return; }
+    if (!mine) return; // the Me row is greyed out then
     if (prefs.posMode === 'gps') setFollow(true);
     map.setView(mine.coords[0], Math.max(map.getZoom(), 15));
   }
@@ -595,35 +596,35 @@ function startApp(session) {
   function renderView(pop) {
     const folders = allFolders();
     pop.innerHTML = `
-      <h4>Base map</h4>
+      <h4>${t('view.base')}</h4>
       <div class="chips">
-        ${chip('data-base', 'topo', 'topo', 'Topo', prefs.base === 'topo')}
+        ${chip('data-base', 'topo', 'topo', t('view.topo'), prefs.base === 'topo')}
         ${chip('data-base', 'osm', 'map', 'OSM', prefs.base === 'osm')}
       </div>
-      <h4>Show</h4>
+      <h4>${t('view.show')}</h4>
       <div class="chips">
-        ${chip('data-show', 'grid', 'grid', 'Grid', prefs.show.grid)}
-        ${chip('data-show', 'team', 'user', 'Team', prefs.show.team)}
-        ${chip('data-night', 'night', 'moon', 'Night', prefs.night)}
+        ${chip('data-show', 'grid', 'grid', t('view.grid'), prefs.show.grid)}
+        ${chip('data-show', 'team', 'user', t('view.team'), prefs.show.team)}
+        ${chip('data-night', 'night', 'moon', t('view.night'), prefs.night)}
       </div>
-      <h4>Folders</h4>
+      <h4>${t('view.folders')}</h4>
       <div class="pop-actions">
-        <button class="chip" data-vis="mine">${icon('user')}Only mine</button>
-        <button class="chip" data-vis="all">${icon('eye')}All</button>
+        <button class="chip" data-vis="mine">${icon('user')}${t('view.mine')}</button>
+        <button class="chip" data-vis="all">${icon('eye')}${t('view.all')}</button>
       </div>
       <div class="chips">
         ${folders.map((f) => chip('data-folder', f.id, folderVisible(f.id) ? 'eye' : 'eyeOff', f.name, folderVisible(f.id),
-          ` <span class="count">${objectsIn(f.id).length}</span>`)).join('') || '<div class="empty">No folders yet</div>'}
+          ` <span class="count">${objectsIn(f.id).length}</span>`)).join('') || `<div class="empty">${t('folders.none')}</div>`}
       </div>`;
     pop.onclick = (e) => {
-      const t = e.target;
-      const base = t.closest('[data-base]')?.dataset.base;
-      const show = t.closest('[data-show]')?.dataset.show;
-      const fid = t.closest('[data-folder]')?.dataset.folder;
-      const vis = t.closest('[data-vis]')?.dataset.vis;
+      const tg = e.target;
+      const base = tg.closest('[data-base]')?.dataset.base;
+      const show = tg.closest('[data-show]')?.dataset.show;
+      const fid = tg.closest('[data-folder]')?.dataset.folder;
+      const vis = tg.closest('[data-vis]')?.dataset.vis;
       if (base) { prefs.base = base; applyPrefs(); }
       else if (show) { prefs.show[show] = !prefs.show[show]; applyPrefs(); }
-      else if (t.closest('[data-night]')) { prefs.night = !prefs.night; applyPrefs(); }
+      else if (tg.closest('[data-night]')) { prefs.night = !prefs.night; applyPrefs(); }
       else if (fid) setFolderVisible(fid, !folderVisible(fid));
       else if (vis) {
         for (const f of folders) prefs.folders[f.id] = vis === 'all' || f.id === myFolder();
@@ -642,7 +643,7 @@ function startApp(session) {
       <div class="inrow search">
         ${icon('search')}
         <input name="q" type="search" enterkeyhint="go" autocomplete="off" autocapitalize="off" spellcheck="false"
-          placeholder="Search, MGRS or lat, lon">
+          placeholder="${esc(t('goto.ph'))}">
       </div>
       <div class="results"></div>`;
     const results = $('.results', pop);
@@ -654,7 +655,7 @@ function startApp(session) {
       e.preventDefault();
       const first = results.querySelector('[data-go], [data-user], [data-item]');
       if (first) pick(first);
-      else toast('Nothing found');
+      else toast(t('goto.nothing'));
     };
     renderResults();
     setTimeout(() => input.focus(), 0);
@@ -679,13 +680,13 @@ function startApp(session) {
     if (user) {
       const p = sync.positions.get(user);
       if (p) map.setView([p.lat, p.lon], Math.max(map.getZoom(), 14));
-      else toast(sync.users.get(user)?.ownerId ? 'Agents have no position on the map' : 'No position shared yet');
+      // no position: the row is greyed out, nothing to fly to
       return;
     }
     const it = sync.items.get(item);
     if (!live(it)) return;
     const fid = isFolder(it) ? it.id : folderOf(it);
-    if (!folderVisible(fid)) { setFolderVisible(fid, true); toast(`Showing folder ${folderName(fid)}`); }
+    if (!folderVisible(fid)) setFolderVisible(fid, true);
     if (isFolder(it)) fitFolder(it.id); else zoomTo(it);
   }
 
@@ -694,29 +695,29 @@ function startApp(session) {
     const from = here();
     const dist = (ll) => formatDistance(from.distanceTo(ll));
     const people = teamMembers();
-    const meRow = `<button class="prow" data-go="me">${icon('me')}<span class="name">Me · ${esc(me.callsign)}${follow ? ' (following)' : ''}</span>
-      <span class="meta">${myPosition() ? esc(posSummary(myPosition())) : 'unknown'}</span></button>`;
+    const meRow = `<button class="prow${myPosition() ? '' : ' dim'}" data-go="me">${icon('me')}<span class="name">${t('goto.me')} · ${esc(me.callsign)}${follow ? ` ${t('goto.following')}` : ''}</span>
+      <span class="meta">${myPosition() ? esc(posSummary(myPosition())) : t('pos.unknown')}</span></button>`;
     if (!q) {
-      return `${meRow}<h4>Team · ${people.length}</h4>${people.map((m) => personRow(m, dist)).join('')
-        || '<div class="empty">No one else yet</div>'}`;
+      return `${meRow}<h4>${t('goto.team')} · ${people.length}</h4>${people.map((m) => personRow(m, dist)).join('')
+        || `<div class="empty">${t('goto.noOne')}</div>`}`;
     }
     const c = parseAnyCoord(raw);
-    const coordRow = c && `<h4>Position</h4><button class="prow" data-go="coord" data-lat="${c.lat}" data-lon="${c.lon}" data-prec="${c.precision}">
+    const coordRow = c && `<h4>${t('goto.position')}</h4><button class="prow" data-go="coord" data-lat="${c.lat}" data-lon="${c.lon}" data-prec="${c.precision}">
       ${icon('go')}<span class="name">${esc(formatCoord(c.lat, c.lon))}</span>
       <span class="meta">${esc(c.kind === 'mgrs' ? formatDegrees(c.lat, c.lon) : dist([c.lat, c.lon]))}</span></button>`;
     const match = (...s) => s.some((x) => x?.toLowerCase().includes(q));
     const ppl = people.filter((m) => match(m.callsign, m.owner));
-    const meHit = match(me.callsign, 'me');
+    const meHit = match(me.callsign, 'me', t('goto.me'));
     const folders = allFolders().filter((f) => match(f.name));
     const objs = sync.liveItems().filter((i) => !isFolder(i) && i.kind !== 'position' && match(i.name, i.remarks, folderName(folderOf(i))))
       .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 50);
     const out = [
       coordRow,
-      (ppl.length || meHit) && `<h4>Team</h4>${meHit ? meRow : ''}${ppl.map((m) => personRow(m, dist)).join('')}`,
-      objs.length && `<h4>Objects</h4>${objs.map((i) => objectRow(i, dist(anchor(i)), true)).join('')}`,
-      folders.length && `<h4>Folders</h4>${folders.map((f) => folderButton(f)).join('')}`,
+      (ppl.length || meHit) && `<h4>${t('goto.team')}</h4>${meHit ? meRow : ''}${ppl.map((m) => personRow(m, dist)).join('')}`,
+      objs.length && `<h4>${t('goto.objects')}</h4>${objs.map((i) => objectRow(i, dist(anchor(i)), true)).join('')}`,
+      folders.length && `<h4>${t('goto.folders')}</h4>${folders.map((f) => folderButton(f)).join('')}`,
     ].filter(Boolean).join('');
-    return out || '<div class="empty">Nothing found. Try a name, MGRS (34UDC1234) or lat, lon (52.23, 21.01).</div>';
+    return out || `<div class="empty">${t('goto.nothing')}</div>`;
   }
 
   const anchor = (it) => { const c = geom(it); return c.length === 1 ? L.latLng(c[0]) : L.latLngBounds(c).getCenter(); };
@@ -737,13 +738,13 @@ function startApp(session) {
   }
   const personRow = (m, dist) => `<button class="prow${m.pos ? '' : ' dim'}" data-user="${esc(m.id)}">${icon(m.agent ? 'robot' : 'user')}
     <span class="name">${esc(m.callsign)}</span>
-    <span class="meta">${m.pos ? `${dist([m.pos.lat, m.pos.lon])} · ${ago(m.pos.ts)}` : m.agent ? `agent of ${esc(m.owner)}` : 'no position'}</span></button>`;
+    <span class="meta">${m.pos ? `${dist([m.pos.lat, m.pos.lon])} · ${ago(m.pos.ts)}` : m.agent ? t('person.agentOf', { owner: esc(m.owner) }) : t('person.noPos')}</span></button>`;
   const folderButton = (f) => `<button class="prow" data-item="${esc(f.id)}">${icon('folder')}<span class="name">${esc(f.name)}</span>
     <span class="meta">${objectsIn(f.id).length}</span></button>`;
   // Only the icon carries the object's color; text stays ink for legibility.
   const objectRow = (i, meta, showFolder = false) => `<button class="prow${folderVisible(folderOf(i)) ? '' : ' dim'}" data-item="${esc(i.id)}">
     <span class="swatch-icon" style="color:${esc(i.color || DEFAULT_COLORS[i.kind])}">${icon(KIND_ICON[i.kind])}</span>
-    <span class="name">${esc(i.name || KIND_LABEL[i.kind])}</span>
+    <span class="name">${esc(i.name || kindLabel(i.kind))}</span>
     <span class="meta">${showFolder ? `${esc(folderName(folderOf(i)))} · ` : ''}${esc(meta)}</span></button>`;
 
   // The current folder is where new objects go. It is the only unfolded one
@@ -753,7 +754,6 @@ function startApp(session) {
     prefs.drawFolder = fid;
     savePrefs(prefs);
     if (!folderVisible(fid)) setFolderVisible(fid, true); // you work where you can see
-    toast(`New objects go to ${folderName(fid)}`);
   }
 
   // Objects: folders as an accordion. Only the current folder is unfolded.
@@ -769,26 +769,26 @@ function startApp(session) {
         const owner = personalOwner(f.id);
         return `<div class="frow">
             <button class="prow folder-head${open ? ' current' : ''}${folderVisible(f.id) ? '' : ' dim'}" data-toggle="${esc(f.id)}" aria-expanded="${open}"
-              title="${open ? 'Current folder: new objects go here' : 'Make current'}">
+              title="${t(open ? 'obj.current' : 'obj.makeCurrent')}">
               <span class="chev${open ? ' open' : ''}">${icon('chevron')}</span>${icon(folderVisible(f.id) ? 'folder' : 'eyeOff')}
               <span class="name">${esc(f.name)}</span>
-              ${owner ? `<span class="tag" title="${owner.ownerId ? 'Agent folder' : 'Personal folder'}">${icon(owner.ownerId ? 'robot' : 'user')}</span>` : ''}
-              ${f.id === target ? `<span class="tag" title="New objects go here">${icon('star')}</span>` : ''}
+              ${owner ? `<span class="tag" title="${t(owner.ownerId ? 'obj.agentFolder' : 'obj.personalFolder')}">${icon(owner.ownerId ? 'robot' : 'user')}</span>` : ''}
+              ${f.id === target ? `<span class="tag" title="${t('obj.current')}">${icon('star')}</span>` : ''}
               <span class="meta">${objs.length}</span>
             </button>
-            <button class="mini" data-folder-menu="${esc(f.id)}" aria-label="Folder options">${icon('more')}</button>
+            <button class="mini" data-folder-menu="${esc(f.id)}" aria-label="${t('aria.folderOptions')}">${icon('more')}</button>
           </div>
-          ${open ? `<div class="sublist">${objs.map((i) => `<div class="frow">${objectRow(i, KIND_LABEL[i.kind])}
-            <button class="mini" data-details="${esc(i.id)}" aria-label="Details">${icon('info')}</button></div>`).join('')
-            || '<div class="empty">Empty</div>'}</div>` : ''}`;
-      }).join('') || '<div class="empty">No folders yet</div>'}`;
+          ${open ? `<div class="sublist">${objs.map((i) => `<div class="frow">${objectRow(i, kindLabel(i.kind))}
+            <button class="mini" data-details="${esc(i.id)}" aria-label="${t('aria.details')}">${icon('info')}</button></div>`).join('')
+            || `<div class="empty">${t('obj.empty')}</div>`}</div>` : ''}`;
+      }).join('') || `<div class="empty">${t('folders.none')}</div>`}`;
     pop.scrollTop = scroll;
     pop.onclick = (e) => {
-      const t = e.target;
-      const tog = t.closest('[data-toggle]')?.dataset.toggle;
-      const menu = t.closest('[data-folder-menu]')?.dataset.folderMenu;
-      const i = t.closest('[data-item]')?.dataset.item;
-      const details = t.closest('[data-details]')?.dataset.details;
+      const tg = e.target;
+      const tog = tg.closest('[data-toggle]')?.dataset.toggle;
+      const menu = tg.closest('[data-folder-menu]')?.dataset.folderMenu;
+      const i = tg.closest('[data-item]')?.dataset.item;
+      const details = tg.closest('[data-details]')?.dataset.details;
       if (tog) {
         setCurrentFolder(tog);
         renderObjects(pop);
@@ -799,7 +799,7 @@ function startApp(session) {
         setFollow(false);
         const it = sync.items.get(i);
         const fid = folderOf(it);
-        if (!folderVisible(fid)) { setFolderVisible(fid, true); toast(`Showing folder ${folderName(fid)}`); }
+        if (!folderVisible(fid)) setFolderVisible(fid, true);
         hideSheet();
         navigate(`/i/${i}`);
         select(it);
@@ -842,80 +842,80 @@ function startApp(session) {
       <h4>${esc(label)}</h4>
       <div class="frow">
         <div class="prow"><span class="name">${value}</span>${extra}</div>
-        ${copy ? `<button class="mini" data-copy="${esc(copy)}" aria-label="Copy ${esc(label)}">${icon('copy')}</button>` : ''}
+        ${copy ? `<button class="mini" data-copy="${esc(copy)}" aria-label="${t('aria.copy')}">${icon('copy')}</button>` : ''}
       </div>`;
     body.innerHTML = `
-      ${field('Callsign', esc(me.callsign))}
-      ${field('Team', esc(session.team?.name ?? '?'))}
-      ${field('Sign in on another device', `${esc(location.origin)}/login#${esc(elide(session.token))}`, 'login')}
-      <p class="empty">This link signs in as <b>${esc(me.callsign)}</b>. Treat it like a password.</p>
-      ${field('Invite to team', esc(teamInvite ? `${location.origin}/join?t=${teamInvite}`
-        : inviteErr ?? (navigator.onLine ? 'Loading…' : 'Needs a connection.')), teamInvite ? 'invite' : '')}
-      ${field('My position', pos ? esc(pos) : 'unknown', pos ? 'pos' : '',
+      ${field(t('info.callsign'), esc(me.callsign))}
+      ${field(t('info.team'), esc(session.team?.name ?? '?'))}
+      ${field(t('info.signin'), `${esc(location.origin)}/login#${esc(elide(session.token))}`, 'login')}
+      <p class="empty">🔒 ${esc(me.callsign)}</p>
+      ${field(t('info.invite'), esc(teamInvite ? `${location.origin}/join?t=${teamInvite}`
+        : inviteErr ? errText(inviteErr) : t(navigator.onLine ? 'common.loading' : 'common.needsConn')), teamInvite ? 'invite' : '')}
+      ${field(t('info.position'), pos ? esc(pos) : t('pos.unknown'), pos ? 'pos' : '',
         mine ? `<span class="meta">${esc(posSummary(mine))}</span>` : '')}
       ${mine ? `<p class="empty">${esc(formatDegrees(mine.coords[0][0], mine.coords[0][1]))}</p>` : ''}
-      <div class="pop-actions"><button class="chip" data-act="new-team">${icon('plus')}New team</button></div>`;
+      <h4>${t('info.language')}</h4>
+      <div class="chips">${Object.entries(LANGS).map(([k, label]) => chip('data-lang', k, 'globe', label, getLang() === k)).join('')}</div>
+      <div class="pop-actions"><button class="chip" data-act="new-team">${icon('plus')}${t('info.newTeam')}</button></div>`;
     body.onclick = async (e) => {
-      const t = e.target;
-      const what = t.closest('[data-copy]')?.dataset.copy;
-      if (what === 'login') copyText(loginURL(), 'Sign-in link copied · keep it private');
-      else if (what === 'invite') copyText(`${location.origin}/join?t=${teamInvite}`, 'Invite link copied');
-      else if (what === 'pos' && mine) copyText(formatCoord(mine.coords[0][0], mine.coords[0][1]), 'Position copied');
-      else if (t.closest('[data-act="new-team"]')) openFrom('info', newTeamForm);
+      const tg = e.target;
+      const what = tg.closest('[data-copy]')?.dataset.copy;
+      if (what === 'login') copyText(loginURL());
+      else if (what === 'invite') copyText(`${location.origin}/join?t=${teamInvite}`);
+      else if (what === 'pos' && mine) copyText(formatCoord(mine.coords[0][0], mine.coords[0][1]));
+      else if (tg.closest('[data-act="new-team"]')) openFrom('info', newTeamForm);
+      else if (tg.closest('[data-lang]')) changeLang(tg.closest('[data-lang]').dataset.lang);
     };
     if (teamInvite || inviteErr || !navigator.onLine) return;
     try {
       teamInvite = (await api('GET', '/api/team/invite')).token;
     } catch (ex) {
-      inviteErr = ex.message;
+      inviteErr = ex;
     }
     if (openPop === 'info') renderInfo(body);
   }
 
   function newTeamForm() {
     const s = openSheet(`
-      <h2>New team</h2>
-      <p class="sub">Creates an empty team with its own invite link. You stay in
-        <b>${esc(session.team?.name ?? '?')}</b> until you join the new one.</p>
-      <label for="f-tname">Team name</label>
-      <input id="f-tname" maxlength="80" placeholder="e.g. Recon east">
+      <h2>${t('info.newTeam')}</h2>
+      <label for="f-tname">${t('team.name')}</label>
+      <input id="f-tname" maxlength="80" placeholder="${esc(t('team.ph'))}">
       <div class="row actions">
-        <button class="btn" data-a="cancel">Cancel</button>
-        <button class="btn primary" data-a="create">Create</button>
+        <button class="btn" data-a="cancel">${t('act.cancel')}</button>
+        <button class="btn primary" data-a="create">${t('act.create')}</button>
       </div>`);
     const input = $('#f-tname');
     input.focus();
+    disableWhileEmpty(input, $('#sheet [data-a="create"]'));
     s.onclick = async (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'cancel') { closeSheet(); togglePop('info'); return; }
       if (a !== 'create') return;
       const name = input.value.trim();
-      if (!name) { toast('Give the team a name'); return; }
+      if (!name) return;
       let res;
       try {
         res = await api('POST', '/api/teams', { name });
       } catch (ex) {
-        toast(navigator.onLine ? `Could not create team: ${ex.message}` : 'Creating a team needs a connection.');
+        toast(navigator.onLine ? t('toast.error', { msg: errText(ex) }) : t('toast.offline'));
         return;
       }
       showNewTeam(res.team, `${location.origin}/join?t=${res.token}`);
     };
   }
 
-  function showNewTeam(t, url) {
+  function showNewTeam(team, url) {
     const s = openSheet(`
-      <h2>Team ${esc(t.name)}</h2>
-      <p class="sub">Share this invite link. Anyone who opens it can join the team.</p>
+      <h2>${t('team.title', { name: esc(team.name) })}</h2>
       <textarea class="prompt link" readonly rows="2">${esc(url)}</textarea>
-      <p class="sub">Joining it on this device signs you out of <b>${esc(session.team?.name ?? '?')}</b>.
-        Copy your sign-in link from INFO first to come back.</p>
+      <p class="sub">⚠ ${esc(session.team?.name ?? '?')} → ${esc(team.name)}</p>
       <div class="row actions">
-        <button class="btn" data-a="copy">${icon('copy')} Copy link</button>
-        <button class="btn primary" data-a="join">Join now</button>
+        <button class="btn" data-a="copy">${icon('copy')} ${t('act.copyLink')}</button>
+        <button class="btn primary" data-a="join">${t('team.joinNow')}</button>
       </div>`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
-      if (a === 'copy') copyText(url, 'Invite link copied');
+      if (a === 'copy') copyText(url);
       else if (a === 'join') location.assign(url);
     };
   }
@@ -928,33 +928,31 @@ function startApp(session) {
     if (json) headers['Content-Type'] = 'application/json';
     const r = await fetch(path, { method, headers, body: json ? JSON.stringify(json) : undefined });
     const body = r.status === 204 ? null : await r.json().catch(() => null);
-    if (!r.ok) throw new Error(body?.error ?? r.statusText);
+    if (!r.ok) throw Object.assign(new Error(body?.error ?? r.statusText), { code: body?.code });
     return body;
   }
 
   async function renderAgents(body) {
     body.innerHTML = `
-      <div class="pop-actions"><button class="chip on" data-act="connect">${icon('robot')}Connect an agent</button></div>
-      <div class="agent-list"><div class="empty">Loading…</div></div>
-      <p class="empty">An agent reads all team data and can only change objects in its own folder.
-        It appears on the team as <b>${esc(me.callsign.toUpperCase())}-ALPHA</b>, <b>-BRAVO</b>, …</p>`;
+      <div class="pop-actions"><button class="chip on" data-act="connect">${icon('robot')}${t('agents.connect')}</button></div>
+      <div class="agent-list"><div class="empty">${t('common.loading')}</div></div>`;
     body.onclick = async (e) => {
-      const t = e.target;
-      if (t.closest('[data-act="connect"]')) { connectAgent(); return; }
-      const rev = t.closest('[data-revoke]')?.dataset.revoke;
-      if (rev) openFrom('agents', () => confirmRevoke(rev, t.closest('[data-revoke]').dataset.name));
+      const tg = e.target;
+      if (tg.closest('[data-act="connect"]')) { connectAgent(); return; }
+      const rev = tg.closest('[data-revoke]')?.dataset.revoke;
+      if (rev) openFrom('agents', () => confirmRevoke(rev, tg.closest('[data-revoke]').dataset.name));
     };
-    if (!navigator.onLine) { $('.agent-list', body).innerHTML = '<div class="empty">Needs a connection.</div>'; return; }
+    if (!navigator.onLine) { $('.agent-list', body).innerHTML = `<div class="empty">${t('common.needsConn')}</div>`; return; }
     try {
       const list = await api('GET', '/api/agents');
-      $('.agent-list', body).innerHTML = list.length ? `<h4>Your agents · ${list.length}</h4>${list.map((a) => `
+      $('.agent-list', body).innerHTML = list.length ? `<h4>${t('agents.yours', { n: list.length })}</h4>${list.map((a) => `
         <div class="frow">
           <div class="prow${a.revoked ? ' dim' : ''}">${icon('robot')}<span class="name">${esc(a.callsign)}</span>
-            <span class="meta">${a.revoked ? 'revoked' : a.lastUsedAt ? `used ${ago(a.lastUsedAt)}` : 'never used'}</span></div>
-          ${a.revoked ? '' : `<button class="mini" data-revoke="${esc(a.id)}" data-name="${esc(a.callsign)}" aria-label="Revoke">${icon('x')}</button>`}
-        </div>`).join('')}` : '<div class="empty">No agents yet.</div>';
+            <span class="meta">${a.revoked ? t('agents.revoked') : a.lastUsedAt ? t('agents.used', { ago: ago(a.lastUsedAt) }) : t('agents.never')}</span></div>
+          ${a.revoked ? '' : `<button class="mini" data-revoke="${esc(a.id)}" data-name="${esc(a.callsign)}" aria-label="${t('act.revoke')}">${icon('x')}</button>`}
+        </div>`).join('')}` : `<div class="empty">${t('agents.none')}</div>`;
     } catch (ex) {
-      $('.agent-list', body).innerHTML = `<div class="empty">Could not load agents: ${esc(ex.message)}</div>`;
+      $('.agent-list', body).innerHTML = `<div class="empty">${t('agents.loadFail', { msg: esc(errText(ex)) })}</div>`;
     }
   }
 
@@ -963,30 +961,28 @@ function startApp(session) {
     try {
       res = await api('POST', '/api/agents');
     } catch (ex) {
-      toast(`Could not create agent: ${ex.message}`);
+      toast(navigator.onLine ? t('toast.error', { msg: errText(ex) }) : t('toast.offline'));
       return;
     }
     openFrom('agents', () => openSheet(`
       <h2>${icon('robot')} ${esc(res.agent.callsign)}</h2>
-      <p class="sub">Paste this into your AI agent (Claude Code or similar). The token is
-        <b>shown only once</b>. Anyone with it can read your team's data.</p>
+      <p class="sub">🔒 ${t('agents.once')}</p>
       <textarea class="prompt" readonly rows="6">${esc(res.prompt)}</textarea>
       <div class="row actions">
-        <button class="btn primary" data-a="copy">${icon('copy')} Copy prompt</button>
+        <button class="btn primary" data-a="copy">${icon('copy')} ${t('agents.copyPrompt')}</button>
       </div>`));
     $('#sheet').onclick = async (e) => {
       if (e.target.closest('[data-a]')?.dataset.a !== 'copy') return;
-      copyText($('#sheet .prompt').value, 'Prompt copied');
+      copyText($('#sheet .prompt').value);
     };
   }
 
   function confirmRevoke(id, name) {
     const s = openSheet(`
-      <h2>Revoke ${esc(name)}?</h2>
-      <p>Its token stops working at once. Its folder and objects stay on the map.</p>
+      <h2>${t('agents.revokeQ', { name: esc(name) })}</h2>
       <div class="row actions">
-        <button class="btn" data-a="no">Cancel</button>
-        <button class="btn danger" data-a="yes">Revoke</button>
+        <button class="btn" data-a="no">${t('act.cancel')}</button>
+        <button class="btn danger" data-a="yes">${t('act.revoke')}</button>
       </div>`);
     s.onclick = async (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
@@ -994,9 +990,8 @@ function startApp(session) {
       if (a !== 'yes') return;
       try {
         await api('DELETE', `/api/agents/${encodeURIComponent(id)}`);
-        toast(`${name} revoked`);
       } catch (ex) {
-        toast(`Could not revoke: ${ex.message}`);
+        toast(navigator.onLine ? t('toast.error', { msg: errText(ex) }) : t('toast.offline'));
       }
       closeSheet();
       togglePop('agents');
@@ -1008,13 +1003,14 @@ function startApp(session) {
     onChange: (kind, n, min) => {
       $('#drawctl').hidden = !kind;
       $('[data-fab="draw"]').classList.toggle('active', !!kind);
-      $('[data-fab="draw"]').innerHTML = `${icon(kind ? 'x' : 'pencil')}<span class="lbl">${kind ? 'Cancel' : 'Draw'}</span>`;
+      $('[data-fab="draw"]').innerHTML = `${icon(kind ? 'x' : 'pencil')}<span class="lbl" data-i18n="${kind ? 'tile.cancel' : 'tile.draw'}">${t(kind ? 'tile.cancel' : 'tile.draw')}</span>`;
       if (!kind) return;
       const into = ` → ${folderName(drawTarget())}`;
       $('#draw-hint').textContent = kind === 'waypoint'
-        ? `Tap map or +${into}`
-        : `${KIND_LABEL[kind]} · ${n} pt${n === 1 ? '' : 's'}${n < min ? ` (min ${min})` : ''}${into}`;
+        ? `${t('draw.tap')}${into}`
+        : `${kindLabel(kind)} · ${t('n.pts', { n })}${n < min ? ` ${t('draw.min', { n: min })}` : ''}${into}`;
       $('[data-draw="done"]').hidden = kind === 'waypoint';
+      $('[data-draw="done"]').disabled = n < min;
       $('[data-draw="undo"]').hidden = kind === 'waypoint' || n === 0;
     },
     onFinish: async (kind, coords) => {
@@ -1041,13 +1037,13 @@ function startApp(session) {
     if (a === 'center') draw.addCenter();
     else if (a === 'undo') draw.undo();
     else if (a === 'cancel') draw.cancel();
-    else if (a === 'done' && !draw.finish()) toast('Not enough points yet');
+    else if (a === 'done') draw.finish(); // DONE is disabled until there are enough points
   });
 
   function onItemTap(id, latlng) {
     const it = sync.items.get(id);
     if (rbPick) {
-      if (it?.kind === 'waypoint') rbPicked(id); else toast('Pick a waypoint, a teammate or ME');
+      if (it?.kind === 'waypoint') rbPicked(id);
       return;
     }
     if (draw.active) {
@@ -1088,7 +1084,7 @@ function startApp(session) {
     } else if (final) {
       pendingRoute = null;
       history.replaceState(null, '', '/');
-      toast('That link is not part of your team (or was deleted)');
+      toast(t('toast.notFound'));
     }
   }
   window.addEventListener('popstate', () => {
@@ -1125,7 +1121,7 @@ function startApp(session) {
     const url = location.origin + location.pathname;
     try {
       await navigator.clipboard.writeText(url);
-      toast('Link copied · only your team can open it');
+      toast(t('toast.copied'));
     } catch {
       toast(url);
     }
@@ -1134,7 +1130,7 @@ function startApp(session) {
   // ----- panel (details, forms) -----
   // Opens in the same place as the menus (where the button column was), to keep
   // the map free. A panel opened from a menu shows "‹ <menu>" to go back to it.
-  const FAB_LABEL = { info: 'Info', view: 'View', goto: 'Go to', objects: 'Obj', agents: 'Agent' };
+  const FAB_LABEL = { info: 'tile.info', view: 'tile.view', goto: 'tile.goto', objects: 'tile.obj', agents: 'tile.agent' };
   let panelFrom = null; // menu the current panel was opened from, or null (map tap, link)
   function openFrom(menu, fn) {
     closePops();
@@ -1145,9 +1141,9 @@ function startApp(session) {
     stopPosEdit();
     const s = $('#sheet');
     const back = panelFrom
-      ? `<button class="sheet-back" data-sheet-back>${icon('chevronLeft')}${esc(FAB_LABEL[panelFrom])}</button>` : '<span></span>';
+      ? `<button class="sheet-back" data-sheet-back>${icon('chevronLeft')}${esc(t(FAB_LABEL[panelFrom]))}</button>` : '<span></span>';
     $('.sheet-body', s).innerHTML = `<div class="sheet-bar">${back}
-      <button class="sheet-x" data-sheet-close aria-label="Close">${icon('x')}</button></div>${html}`;
+      <button class="sheet-x" data-sheet-close aria-label="${t('act.close')}">${icon('x')}</button></div>${html}`;
     s.hidden = false;
     s.scrollTop = 0;
     markTiles();
@@ -1155,11 +1151,11 @@ function startApp(session) {
   }
   // Double tap a big location (details) or the centre coordinate (bottom
   // left) to copy it.
-  onDoubleTap($('#sheet'), '[data-copy-coord]', (t) => copyText(t.dataset.copyCoord, `Copied ${t.dataset.copyCoord}`));
+  onDoubleTap($('#sheet'), '[data-copy-coord]', (t) => copyText(t.dataset.copyCoord));
   onDoubleTap($('#status'), '#center-coord', () => {
     const c = map.getCenter();
     const m = formatCoord(c.lat, c.lng);
-    copyText(m, `Copied ${m}`);
+    copyText(m);
   });
   $('#sheet').addEventListener('click', (e) => {
     if (e.target.closest('[data-sheet-close]')) closeSheet();
@@ -1186,19 +1182,19 @@ function startApp(session) {
     if (it.kind === 'position') return `${formatCoord(...it.coords[0])} · ${posSummary(it)}`;
     if (it.kind === 'rbline') {
       const c = rbEnds(it);
-      const rb = c ? ` · ${formatDistance(L.latLng(c[0]).distanceTo(c[1]))} · ${formatBearing(bearingGrid(c[0][0], c[0][1], c[1][0], c[1][1]))} grid` : '';
+      const rb = c ? ` · ${formatDistance(L.latLng(c[0]).distanceTo(c[1]))} · ${formatBearing(bearingGrid(c[0][0], c[0][1], c[1][0], c[1][1]))} ${t('rb.grid')}` : '';
       return `${endName(it.ends[0])} → ${endName(it.ends[1])}${rb}`;
     }
     if (it.kind === 'waypoint') return formatCoord(...it.coords[0]);
-    if (it.kind === 'line') return `${it.coords.length} pts · ${formatDistance(lineLength(it.coords))}`;
+    if (it.kind === 'line') return `${t('n.pts', { n: it.coords.length })} · ${formatDistance(lineLength(it.coords))}`;
     const a = polygonArea(it.coords);
-    return `${it.coords.length} pts · ${a < 1e6 ? `${Math.round(a)} m²` : `${(a / 1e6).toFixed(2)} km²`}`;
+    return `${t('n.pts', { n: it.coords.length })} · ${a < 1e6 ? `${Math.round(a)} m²` : `${(a / 1e6).toFixed(2)} km²`}`;
   }
 
   // Callsign for display; agents get a robot mark.
   function author(uid) {
     const u = sync.users.get(uid);
-    const name = u?.callsign ?? sync.positions.get(uid)?.callsign ?? (uid === me.id ? me.callsign : uid ? uid.slice(0, 6) : 'system');
+    const name = u?.callsign ?? sync.positions.get(uid)?.callsign ?? (uid === me.id ? me.callsign : uid ? uid.slice(0, 6) : t('author.system'));
     return u?.ownerId ? `${name} 🤖` : name;
   }
 
@@ -1206,7 +1202,7 @@ function startApp(session) {
   // (wired once on the panel, see onDoubleTap below).
   function bigCoord([lat, lon]) {
     const m = formatCoord(lat, lon);
-    return `<div class="big-coord" data-copy-coord="${esc(m)}" title="Double tap to copy">${esc(m)}
+    return `<div class="big-coord" data-copy-coord="${esc(m)}" title="${t('coord.dblTap')}">${esc(m)}
       <span class="deg">${esc(formatDegrees(lat, lon))}</span></div>`;
   }
 
@@ -1216,19 +1212,19 @@ function startApp(session) {
     const mine = it.createdBy === me.id;
     const s = openSheet(`
       <h2>${icon('gps')} ${esc(author(it.createdBy))}</h2>
-      <div class="sub">Position</div>
+      <div class="sub">${kindLabel('position')}</div>
       ${bigCoord(it.coords[0])}
-      <div class="sub">${esc(posSummary(it))}${!mine && myPosition() ? ` · ${esc(formatDistance(here().distanceTo(it.coords[0])))} away` : ''}</div>
+      <div class="sub">${esc(posSummary(it))}${!mine && myPosition() ? ` · ${t('dist.away', { d: esc(formatDistance(here().distanceTo(it.coords[0]))) })}` : ''}</div>
       <div class="row actions">
-        <button class="btn" data-a="zoom">Zoom</button>
-        <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
+        <button class="btn" data-a="zoom">${t('act.zoom')}</button>
+        <button class="btn icon-btn" data-a="link" aria-label="${t('aria.copyLink')}">${icon('link')}</button>
       </div>
       ${mine ? positionActions() : rbFromMeButton()}`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'zoom') { hideSheet(); zoomTo(it); }
       else if (a === 'link') copyLink();
-      else if (a === 'retry') { startGps(); toast('Asking for location…'); }
+      else if (a === 'retry') startGps();
       else if (a === 'rb-from-me') createRBLine(myPositionId(), it.id);
       else if (positionAction(a)) {
         const now = myPosition();
@@ -1237,13 +1233,18 @@ function startApp(session) {
     };
   }
 
+  function disableWhileEmpty(input, button) {
+    const update = () => { button.disabled = !input.value.trim(); };
+    input.addEventListener('input', update);
+    update();
+  }
+
   // ----- R&B lines -----
-  const rbFromMeButton = () => `<div class="row actions"><button class="btn" data-a="rb-from-me">${icon('rbline')} R&amp;B from me</button></div>`;
+  const rbFromMeButton = () => (myPosition()
+    ? `<div class="row actions"><button class="btn" data-a="rb-from-me">${icon('rbline')} ${esc(t('rb.fromMe'))}</button></div>` : '');
 
   async function createRBLine(from, to) {
-    if (!endPoint(from)) { toast(from === myPositionId() ? 'Your position is unknown: set it first (tap GPS)' : 'Start point is gone'); return; }
-    if (!endPoint(to)) { toast('End point is gone'); return; }
-    if (from === to) { toast('Pick two different points'); return; }
+    if (!endPoint(from) || !endPoint(to) || from === to) return;
     const folder = drawTarget();
     if (folder && !folderVisible(folder)) setFolderVisible(folder, true);
     const n = sync.liveItems().filter((i) => i.kind === 'rbline').length + 1;
@@ -1251,7 +1252,6 @@ function startApp(session) {
       name: `${KIND_PREFIX.rbline}-${n}`, color: DEFAULT_COLORS.rbline, remarks: '' });
     closePops();
     openFrom(null, () => openItem(it.id, false));
-    toast(`R&B line ${endName(from)} → ${endName(to)}`);
   }
 
   // DRAW → R&B: tap the start, then the end (a waypoint, a teammate, or ME).
@@ -1266,13 +1266,14 @@ function startApp(session) {
     el.hidden = !rbPick;
     $('[data-fab="draw"]').classList.toggle('active', !!rbPick);
     if (!rbPick) return;
+    $('[data-rb="me"]').disabled = !myPosition();
     $('#rb-hint').textContent = rbPick.from
-      ? `R&B from ${endName(rbPick.from)} · tap the end point`
-      : 'R&B · tap the start: a waypoint, a teammate or yourself';
+      ? `R&B · ${endName(rbPick.from)} → ?`
+      : 'R&B · ? →';
   }
   function rbPicked(id) {
     if (!rbPick) return false;
-    if (!endPoint(id)) { toast('That has no position'); return true; }
+    if (!endPoint(id)) return true;
     if (!rbPick.from) { rbPick.from = id; showRBPick(); return true; }
     const from = rbPick.from;
     rbPick = null;
@@ -1284,7 +1285,7 @@ function startApp(session) {
   $('#rbctl').addEventListener('click', (e) => {
     const a = e.target.closest('[data-rb]')?.dataset.rb;
     if (a === 'me') {
-      if (!myPosition()) { toast('Your position is unknown: set it first (tap GPS)'); return; }
+      if (!myPosition()) return; // ME is disabled then
       rbPicked(myPositionId());
     } else if (a === 'cancel') { rbPick = null; showRBPick(); }
   });
@@ -1295,17 +1296,17 @@ function startApp(session) {
     if (it.kind === 'position') { showPosition(it); return; }
     const fid = folderOf(it);
     const s = openSheet(`
-      <h2>${esc(it.name || KIND_LABEL[it.kind])}</h2>
-      ${it.kind === 'waypoint' ? `<div class="sub">${esc(KIND_LABEL[it.kind])}</div>${bigCoord(it.coords[0])}`
-        : `<div class="sub">${esc(KIND_LABEL[it.kind])} · ${esc(describe(it))}</div>`}
-      <div class="sub">in <button class="folder-link" data-a="folder">${esc(folderName(fid))}</button></div>
+      <h2>${esc(it.name || kindLabel(it.kind))}</h2>
+      ${it.kind === 'waypoint' ? `<div class="sub">${esc(kindLabel(it.kind))}</div>${bigCoord(it.coords[0])}`
+        : `<div class="sub">${esc(kindLabel(it.kind))} · ${esc(describe(it))}</div>`}
+      <div class="sub">${t('item.in')} <button class="folder-link" data-a="folder">${esc(folderName(fid))}</button></div>
       ${it.remarks ? `<p>${esc(it.remarks)}</p>` : ''}
-      <div class="sub">by ${esc(author(it.createdBy))} · ${formatDateTime(it.updatedAt)}</div>
+      <div class="sub">${t('item.by', { who: esc(author(it.createdBy)) })} · ${formatDateTime(it.updatedAt)}</div>
       <div class="row actions">
-        <button class="btn" data-a="zoom">Zoom</button>
-        <button class="btn" data-a="edit">Edit</button>
-        <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
-        <button class="btn danger" data-a="del">Delete</button>
+        <button class="btn" data-a="zoom">${t('act.zoom')}</button>
+        <button class="btn" data-a="edit">${t('act.edit')}</button>
+        <button class="btn icon-btn" data-a="link" aria-label="${t('aria.copyLink')}">${icon('link')}</button>
+        <button class="btn danger" data-a="del">${t('act.delete')}</button>
       </div>
       ${it.kind === 'waypoint' ? rbFromMeButton() : ''}`);
     s.onclick = (e) => {
@@ -1322,11 +1323,10 @@ function startApp(session) {
   function confirmDelete(id) {
     const it = sync.items.get(id);
     const s = openSheet(`
-      <h2>Delete ${esc(it.name || KIND_LABEL[it.kind] || 'folder')}?</h2>
-      <p>This removes it for the whole team.</p>
+      <h2>${t('del.q', { name: esc(it.name || kindLabel(it.kind)) })}</h2>
       <div class="row actions">
-        <button class="btn" data-a="no">Cancel</button>
-        <button class="btn danger" data-a="yes">Delete</button>
+        <button class="btn" data-a="no">${t('act.cancel')}</button>
+        <button class="btn danger" data-a="yes">${t('act.delete')}</button>
       </div>`);
     s.onclick = async (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
@@ -1345,27 +1345,27 @@ function startApp(session) {
     const keepAt = posEdit?.id === id ? posEdit.at : null; // openSheet would revert it
     let color = draft?.color ?? (it.color || DEFAULT_COLORS[it.kind]);
     const s = openSheet(`
-      <h2>${esc(KIND_LABEL[it.kind])}</h2>
+      <h2>${esc(kindLabel(it.kind))}</h2>
       <div class="sub">${esc(describe(it))}</div>
-      <label for="f-name">Name</label>
+      <label for="f-name">${t('f.name')}</label>
       <input id="f-name" maxlength="80" value="${esc(draft?.name ?? it.name)}">
       ${it.kind === 'waypoint' ? `
-      <label for="f-pos">Position · drag the marker, or type MGRS / lat, lon</label>
+      <label for="f-pos">${t('f.position')}</label>
       <div class="inrow">
         <input id="f-pos" value="${esc(formatCoord(...it.coords[0]))}" autocapitalize="characters" autocomplete="off" spellcheck="false">
-        <button class="btn icon-btn" data-a="pos-center" aria-label="Move to the crosshair" title="Move to the crosshair">${icon('plus')}</button>
+        <button class="btn icon-btn" data-a="pos-center" aria-label="${t('f.moveCrosshair')}" title="${t('f.moveCrosshair')}">${icon('plus')}</button>
       </div>
-      <button class="btn" data-a="pos-move">${icon('navigate')} Move on map</button>
-      <div class="sub pos-hint" id="f-pos-hint"></div>` : ''}
-      <label for="f-folder">Folder</label>
+      <button class="btn" data-a="pos-move">${icon('navigate')} ${t('f.moveOnMap')}</button>
+` : ''}
+      <label for="f-folder">${t('f.folder')}</label>
       <select id="f-folder">${folderOptions(draft?.folder ?? folderOf(it))}</select>
-      <label>Color</label>
+      <label>${t('f.color')}</label>
       <div class="swatches">${COLORS.map((c) => `<button class="swatch${c === color ? ' sel' : ''}" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join('')}</div>
-      <label for="f-remarks">Remarks</label>
+      <label for="f-remarks">${t('f.remarks')}</label>
       <textarea id="f-remarks" maxlength="2000">${esc(draft?.remarks ?? it.remarks)}</textarea>
       <div class="row actions">
-        <button class="btn" data-a="cancel">Close</button>
-        <button class="btn primary" data-a="save">Save</button>
+        <button class="btn" data-a="cancel">${t('act.close')}</button>
+        <button class="btn primary" data-a="save">${t('act.save')}</button>
       </div>`);
     s.onclick = async (e) => {
       const sw = e.target.closest('[data-c]');
@@ -1383,12 +1383,9 @@ function startApp(session) {
       else if (a === 'save') {
         const cur = sync.items.get(id);
         const coords = posEdit?.id === id ? [posEdit.at] : cur.coords;
-        if (posEdit?.id === id && posEdit.bad) { toast('Fix the position first'); return; }
+        if (posEdit?.id === id && posEdit.bad) return; // SAVE is disabled then
         const folder = $('#f-folder').value;
-        if (folder !== folderOf(cur) && !folderVisible(folder)) {
-          setFolderVisible(folder, true);
-          toast(`Moved to ${folderName(folder)} (now shown)`);
-        }
+        if (folder !== folderOf(cur) && !folderVisible(folder)) setFolderVisible(folder, true);
         stopPosEdit(false);
         await sync.putItem({ ...cur, name: $('#f-name').value.trim(), remarks: $('#f-remarks').value, color, folder, coords });
         openItem(id, false);
@@ -1409,8 +1406,8 @@ function startApp(session) {
     input.oninput = () => {
       const p = parseAnyCoord(input.value);
       posEdit.bad = !p;
-      $('#f-pos-hint').textContent = p ? '' : 'Not a position: try 34U DC 12345 67890 or 52.23, 21.01';
       input.classList.toggle('invalid', !p);
+      $('#sheet [data-a="save"]').disabled = !p;
       if (p) moveEdit([p.lat, p.lon], false);
     };
   }
@@ -1433,7 +1430,8 @@ function startApp(session) {
     if (input && updateField) {
       input.value = formatCoord(at[0], at[1]);
       input.classList.remove('invalid');
-      $('#f-pos-hint').textContent = '';
+      const save = $('#sheet [data-a="save"]');
+      if (save) save.disabled = false;
     }
   }
   // "Move on map": the edit form steps aside so the waypoint can be dragged,
@@ -1443,7 +1441,7 @@ function startApp(session) {
     moveMode = { id, draft, from: posEdit.at };
     $('#sheet').hidden = true; // not hideSheet(): that would end the edit
     $('#movectl').hidden = false;
-    $('#move-hint').textContent = `Drag ${sync.items.get(id)?.name || 'the waypoint'}, or tap the map`;
+    $('#move-hint').textContent = t('move.hint', { name: sync.items.get(id)?.name || '' });
     armDrag();
     focusItem({ ...sync.items.get(id), coords: [posEdit.at] }, null);
   }
@@ -1494,17 +1492,17 @@ function startApp(session) {
     const canDelete = !owner && objs.length === 0;
     const s = openSheet(`
       <h2>${icon('folder')} ${esc(f.name)}</h2>
-      <div class="sub">${owner ? (owner.ownerId ? `Agent folder of ${esc(author(owner.id))}, agent of ${esc(author(owner.ownerId))}`
-        : `Personal folder of ${esc(owner.callsign)}`) : `Shared folder · created by ${esc(author(f.createdBy))}`}</div>
-      <div class="sub">${objs.length} object${objs.length === 1 ? '' : 's'} · ${vis ? 'shown' : 'hidden'} on map${isTarget ? ' · current (new objects go here)' : ''}</div>
+      <div class="sub">${owner ? (owner.ownerId ? t('folder.agentOf', { agent: esc(author(owner.id)), owner: esc(author(owner.ownerId)) })
+        : t('folder.personalOf', { who: esc(owner.callsign) })) : t('folder.shared', { who: esc(author(f.createdBy)) })}</div>
+      <div class="sub">${t('n.objects', { n: objs.length })} · ${t(vis ? 'folder.shown' : 'folder.hidden')}${isTarget ? ` · ${t('folder.isCurrent')}` : ''}</div>
       <div class="row actions">
-        <button class="btn" data-a="vis">${vis ? 'Hide' : 'Show'}</button>
-        ${isTarget ? '' : '<button class="btn" data-a="target">Make current</button>'}
-        ${owner ? '' : '<button class="btn" data-a="rename">Rename</button>'}
-        <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
-        ${canDelete ? '<button class="btn danger" data-a="del">Delete</button>' : ''}
+        <button class="btn" data-a="vis">${t(vis ? 'act.hide' : 'act.show')}</button>
+        ${isTarget ? '' : `<button class="btn" data-a="target">${t('obj.makeCurrent')}</button>`}
+        ${owner ? '' : `<button class="btn" data-a="rename">${t('act.rename')}</button>`}
+        <button class="btn icon-btn" data-a="link" aria-label="${t('aria.copyLink')}">${icon('link')}</button>
+        ${canDelete ? `<button class="btn danger" data-a="del">${t('act.delete')}</button>` : ''}
       </div>
-      ${owner || canDelete ? '' : '<p class="sub">Move or delete its objects to delete this folder.</p>'}`);
+`);
     s.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'vis') { setFolderVisible(fid, !vis); showFolder(fid); }
@@ -1519,22 +1517,23 @@ function startApp(session) {
   function folderForm(fid) {
     const f = fid ? sync.items.get(fid) : null;
     const s = openSheet(`
-      <h2>${f ? 'Rename folder' : 'New folder'}</h2>
-      <label for="f-fname">Name</label>
-      <input id="f-fname" maxlength="80" value="${esc(f?.name ?? '')}" placeholder="e.g. Recon day 2">
-      ${f ? '' : '<label><input type="checkbox" id="f-target" checked style="width:auto;min-height:0"> Make it the current folder</label>'}
+      <h2>${t(f ? 'folder.rename' : 'folder.new')}</h2>
+      <label for="f-fname">${t('f.name')}</label>
+      <input id="f-fname" maxlength="80" value="${esc(f?.name ?? '')}" placeholder="${esc(t('folder.ph'))}">
+      ${f ? '' : `<label><input type="checkbox" id="f-target" checked style="width:auto;min-height:0"> ${t('folder.setCurrent')}</label>`}
       <div class="row actions">
-        <button class="btn" data-a="cancel">Cancel</button>
-        <button class="btn primary" data-a="save">${f ? 'Save' : 'Create'}</button>
+        <button class="btn" data-a="cancel">${t('act.cancel')}</button>
+        <button class="btn primary" data-a="save">${t(f ? 'act.save' : 'act.create')}</button>
       </div>`);
     const input = $('#f-fname');
+    disableWhileEmpty(input, $('#sheet [data-a="save"]'));
     input.focus();
     s.onclick = async (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
       if (a === 'cancel') { if (f) openItem(fid, false); else closeSheet(); return; }
       if (a !== 'save') return;
       const name = input.value.trim();
-      if (!name) { toast('Give the folder a name'); return; }
+      if (!name) return;
       if (f) {
         await sync.putItem({ ...f, name });
         openItem(fid, false);
@@ -1553,17 +1552,17 @@ function startApp(session) {
   function showUser(uid) {
     const p = sync.positions.get(uid);
     const callsign = p?.callsign ?? sync.users.get(uid)?.callsign ?? (uid === me.id ? me.callsign : '?');
-    const dist = p && myPosition() && uid !== me.id ? ` · ${formatDistance(here().distanceTo([p.lat, p.lon]))} away` : '';
+    const dist = p && myPosition() && uid !== me.id ? ` · ${t('dist.away', { d: formatDistance(here().distanceTo([p.lat, p.lon])) })}` : '';
     const fid = sync.users.get(uid)?.folderId;
     const s = openSheet(`
       <h2>${esc(callsign)}</h2>
       ${p ? `<div class="sub">${esc(formatCoord(p.lat, p.lon))}</div>
-      <div class="sub">seen ${ago(p.ts)}${dist}${p.acc ? ` · ±${Math.round(p.acc)} m` : ''}</div>`
-        : '<div class="sub">No position shared yet</div>'}
-      ${fid && live(sync.items.get(fid)) ? `<div class="sub">folder <button class="folder-link" data-a="folder">${esc(folderName(fid))}</button> · ${objectsIn(fid).length} objects</div>` : ''}
+      <div class="sub">${t('user.seen', { ago: ago(p.ts) })}${esc(dist)}${p.acc ? ` · ±${Math.round(p.acc)} m` : ''}</div>`
+        : `<div class="sub">${t('user.noPos')}</div>`}
+      ${fid && live(sync.items.get(fid)) ? `<div class="sub">${t('user.folder')} <button class="folder-link" data-a="folder">${esc(folderName(fid))}</button> · ${t('n.objects', { n: objectsIn(fid).length })}</div>` : ''}
       <div class="row actions">
-        ${p ? '<button class="btn" data-a="zoom">Zoom</button>' : ''}
-        <button class="btn icon-btn" data-a="link" aria-label="Copy link">${icon('link')}</button>
+        ${p ? `<button class="btn" data-a="zoom">${t('act.zoom')}</button>` : ''}
+        <button class="btn icon-btn" data-a="link" aria-label="${t('aria.copyLink')}">${icon('link')}</button>
       </div>
       ${p && uid !== me.id ? rbFromMeButton() : ''}`);
     s.onclick = (e) => {
@@ -1601,9 +1600,9 @@ function formatDateTime(ts) {
 
 function ago(ts) {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  if (s < 60) return t('ago.s', { n: s });
+  if (s < 3600) return t('ago.m', { n: Math.round(s / 60) });
+  if (s < 86400) return t('ago.h', { n: Math.round(s / 3600) });
   return formatDate(ts);
 }
 
@@ -1626,7 +1625,7 @@ function onDoubleTap(el, sel, fn) {
 
 // Copies text, falling back to a hidden textarea where the clipboard API is
 // missing (plain http on a phone).
-async function copyText(text, done) {
+async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -1638,9 +1637,9 @@ async function copyText(text, done) {
     ta.select();
     const ok = document.execCommand?.('copy');
     ta.remove();
-    if (!ok) { toast('Could not copy'); return; }
+    if (!ok) { toast(t('toast.copyFail')); return; }
   }
-  toast(done);
+  toast(t('toast.copied'));
 }
 
 let toastTimer;
@@ -1673,15 +1672,15 @@ async function showLogin(token, session) {
   let me;
   try {
     const r = await fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } });
-    if (r.status === 401) { msg.textContent = 'This sign-in link is no longer valid.'; return; }
+    if (r.status === 401) { msg.textContent = t('login.invalid'); return; }
     if (!r.ok) throw new Error(r.statusText);
     me = await r.json();
   } catch {
-    msg.textContent = 'Signing in needs a connection. Open the link again when you are online.';
+    msg.textContent = t('login.offline');
     return;
   }
-  msg.innerHTML = `Sign in as <b>${esc(me.user.callsign)}</b> in team <b>${esc(me.team.name)}</b>.`;
-  if (session) msg.innerHTML += ` This device is signed in as <b>${esc(session.user?.callsign ?? '?')}</b> in team <b>${esc(session.team?.name ?? '?')}</b> now; this replaces it.`;
+  msg.innerHTML = t('login.as', { callsign: esc(me.user.callsign), team: esc(me.team.name) });
+  if (session) msg.innerHTML += ` ${t('login.replace', { callsign: esc(session.user?.callsign ?? '?'), team: esc(session.team?.name ?? '?') })}`;
   const go = $('#login-go');
   go.hidden = false;
   go.onclick = async () => {
@@ -1693,12 +1692,14 @@ async function showLogin(token, session) {
 
 const loginToken = location.pathname === '/login' ? location.hash.slice(1) : '';
 
+translateDom(document);
+
 if (loginToken) showLogin(loginToken, session);
 else if (invite) showJoin(invite, session);
 else if (session) startApp(session);
 else {
   if (/^\/[iu]\//.test(location.pathname)) {
-    $('#noinvite p').textContent = 'This link only opens for members of its team. Join with your team\'s invite link first.';
+    $('#noinvite p').textContent = t('noinvite.link');
   }
   $('#noinvite').hidden = false;
 }

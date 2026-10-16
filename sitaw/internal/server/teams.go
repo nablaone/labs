@@ -27,7 +27,7 @@ func (s *Server) handleTeamInvite(w http.ResponseWriter, _ *http.Request, u stor
 			return
 		}
 	}
-	httpError(w, http.StatusNotFound, "this team has no active invite link, ask an admin for one")
+	httpErrorCode(w, http.StatusNotFound, "no_invite", "this team has no active invite link, ask an admin for one")
 }
 
 // handleUserCreateTeam lets any person start a new team. The caller stays in
@@ -35,7 +35,7 @@ func (s *Server) handleTeamInvite(w http.ResponseWriter, _ *http.Request, u stor
 func (s *Server) handleUserCreateTeam(w http.ResponseWriter, r *http.Request, u store.User) {
 	if !s.limiter.allow(u.ID, true) {
 		w.Header().Set("Retry-After", "60")
-		httpError(w, http.StatusTooManyRequests, "too many requests, try again in a minute")
+		httpErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests, try again in a minute")
 		return
 	}
 	name, ok := decodeTeamName(w, r)
@@ -62,7 +62,7 @@ func decodeTeamName(w http.ResponseWriter, r *http.Request) (string, bool) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 80 {
-		httpError(w, http.StatusBadRequest, "name must be 1-80 characters")
+		httpErrorCode(w, http.StatusBadRequest, "name_invalid", "name must be 1-80 characters")
 		return "", false
 	}
 	return name, true

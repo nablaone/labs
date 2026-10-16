@@ -41,6 +41,7 @@ type msg struct {
 	ID     string             `json:"id,omitempty"`
 	OK     *bool              `json:"ok,omitempty"`
 	Error  string             `json:"error,omitempty"`
+	Code   string             `json:"code,omitempty"` // stable error code for translation
 	You    *store.PublicUser  `json:"you,omitempty"`
 	Team   *store.Team        `json:"team,omitempty"`
 	Users  []store.PublicUser `json:"users,omitempty"`
@@ -152,7 +153,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Browsers can't set headers on a WebSocket, so the token rides in the query.
 	u, err := s.store.UserByToken(r.URL.Query().Get("token"))
 	if errors.Is(err, store.ErrUnauthorized) {
-		httpError(w, http.StatusUnauthorized, "unauthorized")
+		httpErrorCode(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 	if err != nil {
@@ -234,7 +235,7 @@ func (s *Server) handleMsg(c *client, m msg) {
 			return
 		}
 		if err := validateItem(it); err != nil {
-			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error()})
+			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), Code: "invalid"})
 			return
 		}
 		sentAt := it.UpdatedAt
@@ -246,12 +247,12 @@ func (s *Server) handleMsg(c *client, m msg) {
 		}
 		stored, applied, cascaded, err := s.store.PutItemAll(team, *it, c.user)
 		if errors.Is(err, store.ErrForeignItem) {
-			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: "id in use"})
+			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: "id in use", Code: "id_in_use"})
 			return
 		}
 		if errors.Is(err, store.ErrForbidden) {
 			// e.g. someone else's position, or an agent outside its folder.
-			ack := msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), SentAt: sentAt}
+			ack := msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), Code: "forbidden", SentAt: sentAt}
 			if stored.ID != "" {
 				ack.Item = &stored // the client puts the server copy back
 			}
@@ -260,12 +261,12 @@ func (s *Server) handleMsg(c *client, m msg) {
 		}
 		if errors.Is(err, store.ErrBadEnds) {
 			// e.g. an R&B line to a waypoint deleted meanwhile: drop it client-side.
-			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), SentAt: sentAt})
+			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: err.Error(), Code: "bad_ends", SentAt: sentAt})
 			return
 		}
 		if errors.Is(err, store.ErrFolderInUse) {
 			// Hand back the folder so the client can undo its local delete.
-			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: "only empty, non-personal folders can be deleted", Item: &stored, SentAt: sentAt})
+			s.reply(c, msg{T: "ack", ID: it.ID, OK: ptr(false), Error: "only empty, non-personal folders can be deleted", Code: "folder_in_use", Item: &stored, SentAt: sentAt})
 			return
 		}
 		if err != nil {

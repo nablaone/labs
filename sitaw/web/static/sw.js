@@ -16,6 +16,7 @@ const SHELL = [
   '/', '/css/app.css', '/manifest.webmanifest', '/icon.svg',
   '/js/app.js', '/js/sync.js', '/js/db.js', '/js/layers.js', '/js/draw.js',
   '/js/mgrs.js', '/js/mgrsgrid.js', '/js/coords.js', '/js/icons.js',
+  '/js/i18n.js', '/js/lang/en.js', '/js/lang/pl.js',
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css',
   '/vendor/leaflet/images/layers.png', '/vendor/leaflet/images/layers-2x.png',
 ];

@@ -64,7 +64,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 .btn .i { width: 20px; height: 20px; }
 .btn.icon-btn { flex: 0 0 var(--tap); padding: 0; display: grid; place-items: center; }
-.btn:disabled { opacity: .4; }
+.btn:disabled, .fab:disabled { opacity: .35; cursor: default; }
+.fab:disabled:active { background: var(--paper); color: var(--ink); }
 input, textarea, select { width: 100%; min-height: var(--tap); padding: 10px 12px; font-size: 17px;
   border: var(--line) solid var(--rule); background: var(--paper); color: var(--ink); }
 input:focus, textarea:focus, select:focus { outline: var(--line) solid var(--signal); outline-offset: 0; }

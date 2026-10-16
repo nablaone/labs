@@ -56,7 +56,7 @@ func (s *Server) handleAgentInstructions(w http.ResponseWriter, r *http.Request,
 func (s *Server) humanOnly(h func(http.ResponseWriter, *http.Request, store.User)) http.HandlerFunc {
 	return s.withUser(func(w http.ResponseWriter, r *http.Request, u store.User) {
 		if u.IsAgent() {
-			httpError(w, http.StatusForbidden, "agents cannot manage agents or teams")
+			httpErrorCode(w, http.StatusForbidden, "forbidden", "agents cannot manage agents or teams")
 			return
 		}
 		h(w, r, u)
@@ -103,7 +103,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request, u sto
 func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request, u store.User) {
 	pub, gone, err := s.store.RevokeAgent(u.ID, r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
-		httpError(w, http.StatusNotFound, "no such agent of yours")
+		httpErrorCode(w, http.StatusNotFound, "not_found", "no such agent of yours")
 		return
 	}
 	if err != nil {

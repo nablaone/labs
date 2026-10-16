@@ -171,7 +171,7 @@ export class Sync extends EventTarget {
           await db.put('items', m.id, gone);
           this.emit('item', { item: gone });
         }
-        if (m.error) this.emit('rejected', { id: m.id, error: m.error });
+        if (m.error) this.emit('rejected', { id: m.id, error: m.error, code: m.code });
         break;
       }
       case 'user':

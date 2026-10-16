@@ -150,7 +150,7 @@ func (s *Server) withUser(h func(http.ResponseWriter, *http.Request, store.User)
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, err := s.store.UserByToken(bearer(r))
 		if errors.Is(err, store.ErrUnauthorized) {
-			httpError(w, http.StatusUnauthorized, "unauthorized")
+			httpErrorCode(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 			return
 		}
 		if err != nil {
@@ -165,7 +165,7 @@ func (s *Server) withAdmin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t := bearer(r)
 		if s.adminToken == "" || subtle.ConstantTimeCompare([]byte(t), []byte(s.adminToken)) != 1 {
-			httpError(w, http.StatusUnauthorized, "unauthorized")
+			httpErrorCode(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 			return
 		}
 		h(w, r)
@@ -178,7 +178,7 @@ func (s *Server) withAdmin(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleInviteInfo(w http.ResponseWriter, r *http.Request) {
 	t, err := s.store.InviteTeam(r.PathValue("token"))
 	if errors.Is(err, store.ErrInvalidInvite) || errors.Is(err, store.ErrNotFound) {
-		httpError(w, http.StatusForbidden, store.ErrInvalidInvite.Error())
+		httpErrorCode(w, http.StatusForbidden, "invite_invalid", store.ErrInvalidInvite.Error())
 		return
 	}
 	if err != nil {
@@ -199,16 +199,16 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	cs, err := cleanCallsign(req.Callsign)
 	if err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
+		httpErrorCode(w, http.StatusBadRequest, "callsign_invalid", err.Error())
 		return
 	}
 	u, t, token, err := s.store.Join(req.Invite, cs)
 	switch {
 	case errors.Is(err, store.ErrInvalidInvite):
-		httpError(w, http.StatusForbidden, err.Error())
+		httpErrorCode(w, http.StatusForbidden, "invite_invalid", err.Error())
 		return
 	case errors.Is(err, store.ErrCallsignTaken):
-		httpError(w, http.StatusConflict, "callsign already taken in this team, pick another")
+		httpErrorCode(w, http.StatusConflict, "callsign_taken", "callsign already taken in this team, pick another")
 		return
 	case err != nil:
 		s.internal(w, err)
@@ -363,7 +363,7 @@ func (s *Server) handleKickUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) internal(w http.ResponseWriter, err error) {
 	s.log.Error("request failed", "err", err)
-	httpError(w, http.StatusInternalServerError, "internal error")
+	httpErrorCode(w, http.StatusInternalServerError, "internal", "internal error")
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -374,4 +374,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func httpError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// httpErrorCode adds a stable machine-readable code next to the English
+// message; the web app translates the code, other clients read the message.
+func httpErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }

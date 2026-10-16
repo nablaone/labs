@@ -37,6 +37,7 @@ const P = {
   rbline: '<circle cx="4" cy="20" r="2.2" fill="currentColor"/><path d="M6 18 18 6" stroke-dasharray="3 3"/><path d="M13 5h6v6"/>',
   chevronLeft: '<path d="m15 6-6 6 6 6"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3Z"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>',
 };
 

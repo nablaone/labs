@@ -110,6 +110,29 @@ Follow them for anything new:
   the SVG `#night-red` color matrix (luminance -> 45% red, no green or blue).
   Object colors stay so they remain distinguishable.
 
+## Messages and languages (decided)
+
+- **Few words.** The icon and the context should say what a control does. No
+  explanatory prose in panels, and no toast that only confirms what is visible
+  anyway. Toasts are kept for failures, "✓ Copied" and "Signed out".
+- **Disable, don't complain.** An action that can't run is a disabled control
+  (`:disabled`, or `.dim` for a list row), never a click followed by an error
+  message. Examples: DONE until the shape has enough points, SAVE for an
+  unparseable position, CREATE for an empty name, ME without a position.
+- **i18n.** English (default) and Polish. Every visible string goes through
+  `t('key', vars)` from `js/i18n.js`, with dictionaries in `js/lang/en.js` (the
+  reference) and `js/lang/pl.js`. Plurals are `{one, few, many, other}` maps
+  picked by `Intl.PluralRules`. Static markup uses `data-i18n`, `data-i18n-aria`,
+  `data-i18n-title` and `data-i18n-ph`. The language is picked in INFO and stored
+  in `localStorage['sitaw.lang']`, outside the view prefs because the join screen
+  needs it too. Switching re-renders without a reload (`changeLang`). Numbers use
+  a dot in both languages. Units, MGRS, the agent instructions and the agent API
+  stay English. `web/test/i18n.test.mjs` checks that both dictionaries have the
+  same keys and placeholders, and that every key used in the code exists.
+- **Server errors** carry a stable `code` next to the English `error`
+  (`httpErrorCode`; `code` on WS acks). The web app translates the code via
+  `errText()`, and other clients read `error`.
+
 ## Layout
 
 ```
@@ -132,6 +155,7 @@ web/static/
   js/mgrsgrid.js         Leaflet MGRS grid overlay
   js/coords.js           coordinate format abstraction
   js/icons.js            inline SVG icon set
+  js/i18n.js, js/lang/   t(), language switch, en/pl dictionaries
 docs/FEATURES.md         roadmap, feature status, and what we won't build
 ```
 
