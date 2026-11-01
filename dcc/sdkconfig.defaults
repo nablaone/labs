@@ -1,0 +1,6 @@
+# ESP32-C3 Super Mini: console over the chip's native USB-Serial/JTAG
+# (the board's only USB port -- there's no USB-UART bridge chip).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ESP32-C3FH4: 4MB flash embedded in the chip package.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
