@@ -16,6 +16,24 @@ Background reading, the standards (NMRA S-9.x, RailCommunity RCN-21x)
 and the PIKO manual are in [docs/](docs/README.md). Start with
 [docs/dcc-accessory-primer.md](docs/dcc-accessory-primer.md).
 
+## Hardware
+
+KiCad 10 project in [`hardware/`](hardware/), with a PDF export at
+[`hardware/dcc-sniffer.pdf`](hardware/dcc-sniffer.pdf):
+
+1. **Track input and power**: Schottky bridge (4× 1N5819), 470 µF buffer
+   (rides through RailCom cutouts) and a 5 V step-down module.
+2. **DCC signal input**: 6N137 optocoupler with a 1.5 kΩ series resistor,
+   a red LED anti-parallel to its input (reverse protection and "DCC
+   present" indicator), 100 nF bypass, and a 2.2 kΩ pull-up to 3V3 on
+   GPIO4.
+3. **ESP32-C3 Super Mini**: 5V, GND, 3V3, GPIO4.
+
+The two modules (Super Mini, DC-DC) are custom symbols in
+`hardware/dcc_sniffer.kicad_sym`; everything else comes from the stock
+KiCad libraries. With the step-down module the board's GND is tied to the
+rails, so don't plug in USB while it's powered from the track.
+
 ## Build / flash / monitor
 
 Builds run in Docker (official `espressif/idf` image, see `Dockerfile`).

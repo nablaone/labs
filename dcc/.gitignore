@@ -6,3 +6,10 @@ dependencies.lock
 # Fetched reference PDFs (NMRA/RailCommunity/PIKO copyright) -- kept
 # locally, not redistributed; URLs are in docs/README.md.
 docs/**/*.pdf
+# KiCad local state
+hardware/*.kicad_prl
+hardware/*-backups/
+hardware/fp-info-cache
+hardware/#auto_saved_files#
+hardware/~*.lck
+hardware/.history/

@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "dcc_sniffer")(type "KiCad")(uri "${KIPRJMOD}/dcc_sniffer.kicad_sym")(options "")(descr "DCC sniffer board modules"))
+)
