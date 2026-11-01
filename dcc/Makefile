@@ -3,7 +3,7 @@ IDF_TARGET ?= esp32c3
 APP_DIR := $(CURDIR)
 BUILD_DIR := build
 
-.PHONY: image build monitor shell flash clean
+.PHONY: image build monitor shell flash clean web
 
 image:
 	docker build -t $(IMAGE) .
@@ -50,6 +50,12 @@ monitor:
 
 shell: image
 	docker run --rm -it -v $(APP_DIR):/app -w /app $(IMAGE) bash
+
+# Web Bluetooth viewer (web/index.html). Web Bluetooth only works in a
+# secure context, which localhost counts as -- open http://localhost:8000
+# in Chrome or Edge. Bound to 127.0.0.1 so it isn't exposed on the LAN.
+web:
+	python3 -m http.server 8000 --bind 127.0.0.1 --directory web
 
 clean:
 	rm -rf $(BUILD_DIR) sdkconfig sdkconfig.old

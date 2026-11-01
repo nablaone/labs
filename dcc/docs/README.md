@@ -42,7 +42,10 @@ Index page: <https://normen.railcommunity.de/>
 |---|---|
 | `RCN-210.pdf` | DCC Bit-Übertragung (bit transmission), https://normen.railcommunity.de/RCN-210.pdf |
 | `RCN-211.pdf` | DCC Paketstruktur, Adressbereiche, globale Befehle, https://normen.railcommunity.de/RCN-211.pdf |
+| `RCN-212.pdf` | DCC Betriebsbefehle für Fahrzeugdecoder (loco instructions: speed, F0–F68, binary states, consist), https://normen.railcommunity.de/RCN-212.pdf |
 | `RCN-213.pdf` | DCC Betriebsbefehle für Zubehördecoder (accessory packets), https://normen.railcommunity.de/RCN-213.pdf |
+| `RCN-214.pdf` | DCC Konfigurationsbefehle (CV access: POM long/short form, XPOM), https://normen.railcommunity.de/RCN-214.pdf |
+| `RCN-218.pdf` | DCC-A automatic logon (address 254), https://normen.railcommunity.de/RCN-218.pdf |
 | `RCN-225.pdf` | DCC Konfigurationsvariablen (CVs), https://normen.railcommunity.de/RCN-225.pdf |
 
 ## PIKO, `piko/`
@@ -59,8 +62,6 @@ Index page: <https://normen.railcommunity.de/>
 
 ## Not fetched yet (worth reading)
 
-- **RCN-214**, configuration commands (POM/service mode packets):
-  https://normen.railcommunity.de/RCN-214.pdf
 - **RCN-217**, RailCom (decoder → command station feedback), only
   needed if feedback is ever added.
 - **NmraDcc** Arduino library (MIT-ish, widely used reference decoder

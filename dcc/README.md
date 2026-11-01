@@ -45,10 +45,39 @@ commands: `help`, `version`, `exit`, plus:
     12.345  81 F9 78          ACC 1 R=1 straight/green ON (wire 4)
     12.401  03 76 75          LOCO 3 speed 10/28 fwd
   ```
+- `ble`: Bluetooth link state (advertising/streaming), MTU, packets sent
+  and lost.
 - `dcc stats [clear]`: packet and error counters since boot.
 - `dcc timing [ms]`: histogram of edge-to-edge times on the DCC input.
   A working opto stage shows peaks at 50–60 µs and 90–120 µs. Use this
   first when bringing up the hardware.
+
+## Web viewer (Bluetooth)
+
+`web/index.html` shows the sniffed traffic in Chrome or Edge over **BLE**
+(Web Bluetooth), so the laptop or phone keeps its normal Wi-Fi and
+internet:
+
+```sh
+make web                # then open http://localhost:8000
+```
+
+Click **Connect** and pick `DCC-Sniffer`. The page has two parts:
+
+- **Current state**: one entry per loco/accessory address with the last
+  known value of each parameter (speed, direction, functions, turnout
+  position, ...). Values that change flash briefly.
+- **Log**: every packet with its time, raw bytes, type and description.
+  It has filters (loco/acc/other/idle), "hide repeats", pause, clear and
+  CSV export.
+
+**Demo** feeds synthetic traffic through the same pipeline, so you can
+try the page without hardware. On macOS, Chrome needs Bluetooth
+permission (System Settings → Privacy & Security → Bluetooth). Firefox
+and Safari, including all iPhone browsers, have no Web Bluetooth.
+
+While a page is connected, `dcc sniff` on the USB console competes for
+the same packets, so use one or the other.
 
 ## Layout (`main/`)
 
@@ -66,6 +95,11 @@ commands: `help`, `version`, `exit`, plus:
   queue read by `dcc_receive()`, same shape as canbus's `can.c`.
   `dcc_describe()` turns a packet into text, and the module also
   provides the `dcc` CLI command.
+- `ble_link.c/.h`: NimBLE peripheral `DCC-Sniffer`. It streams every
+  packet from `dcc_receive()` as batched notifications on one GATT
+  characteristic (the record format is in `ble_link.h`), but only while a
+  client is subscribed. Provides the `ble` CLI command (state, MTU,
+  counters).
 - `node_config.h`: pins (with Super Mini pin notes) and `FIRMWARE_VERSION`.
 
 Planned modules (see the primer's §8): accessory address matching, output pulsing, NVS config with a
