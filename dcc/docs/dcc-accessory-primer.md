@@ -142,21 +142,71 @@ Unknown or unsupported packets **must be ignored**, never acted on
 
 ## 6. Hardware interface (TN-9, common practice)
 
+This project's input stage: 6N137, an ordinary LED as the reverse
+diode, ESP32-C3 on a battery supply that provides 5 V (feeding the
+6N137 and the Super Mini's 5V pin; the board's own regulator makes the
+3.3 V for the ESP and the R2 pull-up).
+
 ```
-rail A ──┬──[1k]──►|──┐                       3V3
-         │      6N137 LED                      │
-rail B ──┴─────────◄──┘  (1N4148 anti-parallel  [10k]
-                          across the LED)       │
-                         6N137 output ──────────┴── GPIO (DCC_IN)
+ TRACK SIDE (isolated)               6N137               ESP SIDE (battery / USB)
+
+                                 ┌───────────┐
+ rail A ──[R1 1.5k ½W]──●────────┤2 A   VCC 8├──●── 5V
+                        │        │           │  │
+                     LED1 ▲      │      EN 7 ├──●
+                (cathode up,     │           │
+                 anode down)     │     OUT 6 ├─────●──[R2 2.2k]── 3V3
+                        │        │           │     │
+ rail B ────────────────●────────┤3 K   GND 5├──●  └── GPIO4 (DCC_IN)
+                                 └───────────┘  │
+                                                └── GND
+ 100nF ceramic directly between pins 8 and 5.
 ```
 
-- **Optocoupler** (6N137 or H11L1, which are fast enough for 58 µs
-  half-bits; a PC817 is too slow). It isolates the ESP32 from track
-  voltage and doesn't care which rail is positive (the LED lights on one
-  polarity, so the output shows exactly one half of each bit).
-- **Power** from the track: bridge rectifier → capacitor → buck
-  converter to 5 V/3.3 V. During bench work just power the C3 Super Mini
-  from USB and only feed the opto from the track.
+LED1 sits anti-parallel to the 6N137's input LED (LED1 anode to pin 3,
+cathode to pin 2).
+
+- **Optocoupler**: a 6N137 (10 MBd) is easily fast enough for 58 µs
+  half-bits; a PC817 is too slow. It isolates the ESP32 from track
+  voltage and doesn't care which rail is positive. The input LED
+  conducts on one polarity only, so the output shows exactly one half
+  of each bit.
+- **Reverse protection with an LED**: the 6N137's input LED only
+  tolerates **5 V reverse**. An anti-parallel diode carries the other
+  half-cycle and clamps the reverse voltage to its own forward drop.
+  An ordinary red/green/yellow LED (Vf ≈ 2 V) does that job and also
+  lights up as a "DCC present" indicator. Use a plain LED, not one with
+  a built-in resistor.
+- **R1**: sets the input current. Per the Vishay datasheet
+  (`parts/vishay-6n137.pdf`), the input threshold is 2.4 mA typical and
+  5 mA worst case, the recommended "on" current is **5–15 mA**, and the
+  absolute maximum is 20 mA. With 1.5 kΩ (input LED Vf ≈ 1.4 V) you get
+  about 9–11 mA at 15–18 V track voltage, 14 mA at 22 V, and 4.7 mA at
+  S-9.1's 8.5 V minimum, which is still above the typical threshold.
+  It dissipates up to about 0.3 W, so use a ½ W part. (The 1 kΩ I
+  suggested earlier pushes about 20 mA at 22 V, which is the absolute
+  maximum.)
+- **6N137 supply**: the datasheet part is a **5 V device (VCC 4.5–5.5 V)**.
+  The output is **open-drain** (VO max 7 V), so the clean solution is
+  VCC = 5 V with the R2 pull-up going to **3.3 V**. GPIO4 then never
+  sees more than 3.3 V. The recommended pull-up range is 330 Ω–4 kΩ, so
+  2.2 kΩ fits. Pin 7 (Enable) works when left unconnected (see the
+  truth table), but tying it to VCC is more robust against noise. The
+  datasheet recommends 100 nF across pins 8–5, placed right at the chip.
+- **Speed**: the propagation delay is about 50 ns and the rise time
+  with 2.2 kΩ is about 0.1–0.2 µs, which is negligible against 58 µs
+  half-bits.
+- **Output polarity**: the output is pulled **low while the input LED
+  conducts**. The decoder measures time between edges, so this
+  inversion doesn't matter.
+- **Power**: the ESP runs from a battery, so the track and the ESP share
+  no ground at all, and the opto is the only link between them. During
+  bench work, USB power from the Mac is equally fine for the same
+  reason. Don't feed the battery into the Super Mini's 5V pin while USB
+  is plugged in unless you've checked that the board has a diode on
+  VBUS.
+- **Later, track power instead of battery**: bridge rectifier →
+  capacitor → buck converter to 5 V (which then also feeds the 6N137).
 - **Input pin** on the C3 Super Mini: pick a non-strapping GPIO, e.g.
   GPIO3–GPIO7, GPIO10, GPIO20 or GPIO21. Avoid GPIO2, GPIO8 and GPIO9,
   which are strapping pins (and GPIO8 is the LED, GPIO9 is BOOT).

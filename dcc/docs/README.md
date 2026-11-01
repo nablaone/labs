@@ -51,6 +51,12 @@ Index page: <https://normen.railcommunity.de/>
 |---|---|
 | `piko-55030-55031-switch-decoders.pdf` | Manual for #55030 (2× double-coil turnout outputs) and #55031 (2× relay outputs), DE/EN, https://www.piko-shop.de/is.php?id=2778 |
 
+## Parts datasheets, `parts/`
+
+| File | Document |
+|---|---|
+| `vishay-6n137.pdf` | Vishay 6N137 / VO2601 / VO2611 10 MBd high-speed optocoupler (DCC input stage), https://www.vishay.com/docs/84732/6n137.pdf |
+
 ## Not fetched yet (worth reading)
 
 - **RCN-214**, configuration commands (POM/service mode packets):

@@ -37,7 +37,18 @@ fails to connect, hold BOOT while plugging in (or while tapping RESET).
 
 Logs flow normally. Press **Enter** to switch to the `dcc>` prompt (logs
 are silenced while you're in it), and type `exit` to leave. Built-in
-commands: `help`, `version`, `exit`.
+commands: `help`, `version`, `exit`, plus:
+
+- `dcc sniff [seconds] [-a]`: print decoded DCC packets (default 30 s).
+  Idle packets and repeats are hidden unless `-a` is given.
+  ```
+    12.345  81 F9 78          ACC 1 R=1 straight/green ON (wire 4)
+    12.401  03 76 75          LOCO 3 speed 10/28 fwd
+  ```
+- `dcc stats [clear]`: packet and error counters since boot.
+- `dcc timing [ms]`: histogram of edge-to-edge times on the DCC input.
+  A working opto stage shows peaks at 50–60 µs and 90–120 µs. Use this
+  first when bringing up the hardware.
 
 ## Layout (`main/`)
 
@@ -49,8 +60,13 @@ commands: `help`, `version`, `exit`.
 - `heartbeat_task.c/.h`: toggles the onboard LED (GPIO8) every 500 ms.
   This is the template for new task modules: `xxx_init()` for one-time
   setup, `xxx_task()` for the FreeRTOS loop.
+- `dcc.c/.h`: DCC receiver. A GPIO edge interrupt on `DCC_IN_GPIO`
+  (GPIO4, from the 6N137) times every half-bit, pairs halves into bits,
+  assembles packets and checks the XOR byte. Verified packets go into a
+  queue read by `dcc_receive()`, same shape as canbus's `can.c`.
+  `dcc_describe()` turns a packet into text, and the module also
+  provides the `dcc` CLI command.
 - `node_config.h`: pins (with Super Mini pin notes) and `FIRMWARE_VERSION`.
 
-Planned modules (see the primer's §8): DCC signal capture, packet
-decoder, accessory address matching, output pulsing, NVS config with a
+Planned modules (see the primer's §8): accessory address matching, output pulsing, NVS config with a
 PIKO-style learn button.

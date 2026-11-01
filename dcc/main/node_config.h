@@ -26,3 +26,12 @@
  */
 #define LED_GPIO     GPIO_NUM_8
 #define LED_ON_LEVEL 0
+
+/*
+ * DCC track signal input from the 6N137 optocoupler's open-drain
+ * output (pulled up to 3V3 externally) -- see
+ * ../docs/dcc-accessory-primer.md section 6. GPIO4: free, not a strapping
+ * pin, not USB. Low while the opto's input LED conducts, i.e. during one
+ * half of every DCC bit.
+ */
+#define DCC_IN_GPIO GPIO_NUM_4

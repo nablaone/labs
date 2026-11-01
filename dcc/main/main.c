@@ -5,20 +5,24 @@
 #include "node_config.h"
 #include "console.h"
 #include "heartbeat_task.h"
+#include "dcc.h"
 
 static const char *TAG = "main";
 
 /*
  * Orchestration only -- each module owns its own init/task-loop/CLI-
- * registration. The DCC decoder modules (signal capture, packet decoder,
- * accessory outputs -- see ../docs/README.md) slot in here the same way:
- * an _init() and _register_cli_commands() call, plus an xTaskCreate().
+ * registration. The remaining decoder modules (accessory address
+ * matching, outputs -- see ../docs/dcc-accessory-primer.md) slot in here
+ * the same way: an _init() and _register_cli_commands() call, plus an
+ * xTaskCreate() if they need one.
  */
 void app_main(void)
 {
 	console_init();
 
 	heartbeat_task_init();
+	dcc_init();
+	dcc_register_cli_commands();
 
 	xTaskCreate(heartbeat_task, "heartbeat", 2048, NULL, 5, NULL);
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);
