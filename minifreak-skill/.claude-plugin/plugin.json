@@ -1,0 +1,6 @@
+{
+  "name": "minifreak-skill",
+  "version": "0.1.0",
+  "description": "Control an Arturia MiniFreak synthesizer via MIDI CC and Program Change",
+  "skills": ["minifreak"]
+}

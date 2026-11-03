@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+patches/
+.DS_Store
+.claude/settings.local.json
