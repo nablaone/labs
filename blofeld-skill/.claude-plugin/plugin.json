@@ -1,0 +1,6 @@
+{
+  "name": "blofeld-skill",
+  "version": "0.1.0",
+  "description": "Control a Waldorf Blofeld synthesizer via MIDI SysEx",
+  "skills": ["blofeld"]
+}
