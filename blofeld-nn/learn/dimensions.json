@@ -1,0 +1,18 @@
+[
+  {"name": "brightness",  "low": "dark",        "high": "bright"},
+  {"name": "texture",     "low": "woody",        "high": "metallic"},
+  {"name": "envelope",    "low": "pad",          "high": "plucky"},
+  {"name": "movement",    "low": "static",       "high": "evolving"},
+  {"name": "harshness",   "low": "mellow",       "high": "harsh"},
+  {"name": "weight",      "low": "thin",         "high": "heavy"},
+  {"name": "density",     "low": "sparse",       "high": "dense"},
+  {"name": "space",       "low": "dry",          "high": "spacious"},
+  {"name": "noise",       "low": "tonal",        "high": "noisy"},
+  {"name": "warmth",      "low": "cold",         "high": "warm"},
+  {"name": "attack",      "low": "soft",         "high": "snappy"},
+  {"name": "modulation",  "low": "stable",       "high": "vibrato"},
+  {"name": "distortion",  "low": "clean",        "high": "distorted"},
+  {"name": "presence",    "low": "recessed",     "high": "forward"},
+  {"name": "rhythm",      "low": "smooth",       "high": "rhythmic"},
+  {"name": "character",   "low": "pure",         "high": "complex"}
+]
