@@ -1,0 +1,20 @@
+# DFRobot FireBeetle 2 ESP32-S3-U (DFR0975-U): ESP32-S3-WROOM-1U-N16R8.
+# Identified with `esptool chip-id`/`flash-id`: ESP32-S3 (QFN56) rev v0.1,
+# 8 MB embedded PSRAM, 16 MB quad flash.
+
+# Console over the S3's native USB-Serial/JTAG (the board's USB-C port --
+# no USB-UART bridge chip).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+# Bigger factory app partition (1.5 MB) -- leaves room for an ML model later.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# The "R8" part: 8 MB octal (OPI) PSRAM inside the module. Camera frame
+# buffers go here.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
