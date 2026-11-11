@@ -5,6 +5,10 @@
 #include "esp_err.h"
 #include "esp_camera.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Initialises the OV2640 through esp32-camera (powers it via the PMIC
  * first). Probing the sensor ID over SCCB is how the camera is
  * "detected": a failure here means no camera / no power / bad ribbon. */
@@ -60,3 +64,7 @@ size_t camera_info_json(char *buf, size_t len);
 
 /* "cam" CLI command: info | snap | init | deinit | fmt | res | q. */
 void camera_register_cli_commands(void);
+
+#ifdef __cplusplus
+}
+#endif

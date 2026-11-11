@@ -24,6 +24,7 @@
 
 #include "node_config.h"
 #include "camera.h"
+#include "detector.h"
 
 /* NimBLE host's count of free controller ACL buffers (ble_hs_hci.c).
  * 0 means everything handed down is still waiting to go over the air. */
@@ -99,6 +100,9 @@ static int info_json(char *buf, size_t len)
 		stats.frames, stats.retries);
 	if (n < 0 || (size_t)n >= len) return 0;
 	n += camera_info_json(buf + n, len - n);
+	if ((size_t)n + 8 > len) return 0;
+	n += snprintf(buf + n, len - n, ",\"det\":");
+	n += detector_info_json(buf + n, len - n);
 	if ((size_t)n + 2 > len) return 0;
 	buf[n++] = '}';
 	buf[n] = '\0';
@@ -412,17 +416,12 @@ static void put_u32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v 
 
 static uint8_t chunk[512];
 
-static void send_frame(void)
+/* One header record + data chunks for any payload (camera frame or
+ * detector snapshot). Returns true if every chunk went out. */
+static bool send_payload(const uint8_t *buf, size_t len, uint16_t w, uint16_t h_px,
+			 uint8_t format, uint32_t ts_ms)
 {
 	static uint16_t frame_id;
-
-	int64_t t0 = esp_timer_get_time();
-	camera_fb_t *fb = camera_grab();
-	if (!fb) {
-		reply("err capture failed");
-		streaming = false;
-		return;
-	}
 	frame_id++;
 
 	/* esp_rom_crc32_le(0, ...) is the standard zlib/IEEE CRC-32 (the
@@ -430,40 +429,74 @@ static void send_frame(void)
 	uint8_t *h = chunk;
 	h[0] = REC_HEADER;
 	put_u16(h + 1, frame_id);
-	put_u32(h + 3, fb->len);
-	put_u16(h + 7, fb->width);
-	put_u16(h + 9, fb->height);
-	h[11] = fb->format;
-	put_u32(h + 12, (uint32_t)(fb->timestamp.tv_sec * 1000 + fb->timestamp.tv_usec / 1000));
-	put_u32(h + 16, esp_rom_crc32_le(0, fb->buf, fb->len));
-	/* h[20..21] reserved */
-	put_u16(h + 20, 0);
+	put_u32(h + 3, len);
+	put_u16(h + 7, w);
+	put_u16(h + 9, h_px);
+	h[11] = format;
+	put_u32(h + 12, ts_ms);
+	put_u32(h + 16, esp_rom_crc32_le(0, buf, len));
+	put_u16(h + 20, 0);  /* reserved */
 
 	bool ok = notify(frame_handle, h, HEADER_LEN);
 	size_t off = 0;
-	while (ok && off < fb->len && frame_subscribed) {
+	while (ok && off < len && frame_subscribed) {
 		size_t cap = mtu - 3;
 		if (cap > sizeof(chunk)) cap = sizeof(chunk);
-		size_t n = fb->len - off;
+		size_t n = len - off;
 		if (n > cap - DATA_HDR) n = cap - DATA_HDR;
 
 		chunk[0] = REC_DATA;
 		put_u16(chunk + 1, frame_id);
 		put_u32(chunk + 3, off);
-		memcpy(chunk + DATA_HDR, fb->buf + off, n);
+		memcpy(chunk + DATA_HDR, buf + off, n);
 		ok = notify(frame_handle, chunk, DATA_HDR + n);
 		off += n;
 	}
+	return ok && off == len;
+}
+
+static void send_frame(void)
+{
+	int64_t t0 = esp_timer_get_time();
+	camera_fb_t *fb = camera_grab();
+	if (!fb) {
+		reply("err capture failed");
+		streaming = false;
+		return;
+	}
 	size_t len = fb->len;
+	bool ok = send_payload(fb->buf, len, fb->width, fb->height, fb->format,
+			       (uint32_t)(fb->timestamp.tv_sec * 1000 + fb->timestamp.tv_usec / 1000));
 	camera_release(fb);
 
-	if (ok && off == len) {
+	if (ok) {
 		stats.frames++;
 		stats.bytes += len;
 		stats.last_frame_ms = (esp_timer_get_time() - t0) / 1000;
 	} else {
 		stats.aborted++;
 	}
+}
+
+/* The detector's last inference: model input + all anchor outputs. */
+static void send_detection(void)
+{
+	size_t n = detector_snapshot_size();
+	if (!n) {
+		reply("err no inference yet");
+		return;
+	}
+	uint8_t *buf = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+	if (!buf) {
+		reply("err out of memory");
+		return;
+	}
+	n = detector_snapshot(buf, n);
+	uint16_t res = buf[4] | buf[5] << 8;
+	reply("ok detsnap %u", (unsigned)n);
+	if (!send_payload(buf, n, res, res, DET_SNAPSHOT_FORMAT, (uint32_t)(esp_timer_get_time() / 1000)))
+		stats.aborted++;
+	heap_caps_free(buf);
 }
 
 static void run_command(char *cmd)
@@ -482,6 +515,9 @@ static void run_command(char *cmd)
 		if (!frame_subscribed) { reply("err subscribe to frame first"); return; }
 		reply("ok snap");
 		send_frame();
+	} else if (strcmp(c, "detsnap") == 0) {
+		if (!frame_subscribed) { reply("err subscribe to frame first"); return; }
+		send_detection();
 	} else if (strcmp(c, "stream") == 0) {
 		if (!frame_subscribed) { reply("err subscribe to frame first"); return; }
 		streaming = a && strcmp(a, "on") == 0;
@@ -523,7 +559,18 @@ static void run_command(char *cmd)
 void ble_link_task(void *arg)
 {
 	char cmd[CMD_MAX];
+	uint32_t det_seq = detector_last(NULL, NULL);
 	while (1) {
+		/* Push every new inference result as an event, so the page
+		 * doesn't have to poll: "det <seq> <score> hand|none". */
+		float score;
+		bool hand;
+		uint32_t seq = detector_last(&score, &hand);
+		if (seq != det_seq && link_up()) {
+			reply("det %lu %.3f %s", (unsigned long)seq, score, hand ? "hand" : "none");
+		}
+		det_seq = seq;
+
 		/* While streaming, poll commands between frames; otherwise
 		 * block on the queue. */
 		TickType_t wait = streaming ? 0 : pdMS_TO_TICKS(500);

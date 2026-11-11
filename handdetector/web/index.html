@@ -73,7 +73,15 @@ h2 {
 h2 .tools { margin-left: auto; display: flex; gap: 8px; align-items: center;
   text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
 h2 .tools button, h2 .tools select { padding: 3px 8px; }
-.side { display: grid; gap: 16px; }
+.side, .left { display: grid; gap: 16px; min-width: 0; }
+h2 .tools { flex-wrap: wrap; justify-content: flex-end; }
+h2 .tools label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+#det-canvas { cursor: crosshair; }
+.det-live { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 10px;
+            background: var(--border, #8884); vertical-align: middle; }
+.det-live.hand { background: #2e9d4e; color: #fff; }
+.legend { display: inline-block; width: 90px; height: 8px; border-radius: 4px; vertical-align: middle;
+  background: linear-gradient(90deg, hsl(220 80% 55%), hsl(120 80% 45%), hsl(55 95% 50%), hsl(0 90% 55%)); }
 .viewer {
   display: flex; align-items: center; justify-content: center; min-height: 320px; padding: 12px;
   overflow: auto;
@@ -114,6 +122,7 @@ td:last-child { font-family: var(--mono); font-size: 12.5px; word-break: break-a
 </header>
 <div id="notice"></div>
 <main>
+  <div class="left">
   <section>
     <h2>Camera
       <span class="tools">
@@ -132,6 +141,26 @@ td:last-child { font-family: var(--mono); font-size: 12.5px; word-break: break-a
     </div>
     <div class="caption" id="caption"><span>—</span></div>
   </section>
+
+  <section>
+    <h2>Detection <span id="det-live" class="det-live">—</span>
+      <span class="tools">
+        <label><input type="checkbox" id="det-s8" checked> stride 8</label>
+        <label><input type="checkbox" id="det-s16" checked> stride 16</label>
+        <label><input type="checkbox" id="det-boxes" checked> boxes</label>
+        <label title="Fetch every new inference automatically"><input type="checkbox" id="det-auto" checked> auto</label>
+        <button id="det-get" disabled>Get</button>
+      </span>
+    </h2>
+    <div class="viewer">
+      <canvas id="det-canvas" hidden></canvas>
+      <div id="det-empty" class="empty">No detection yet. <b>Get</b> fetches the model input and every
+        anchor's output from the last inference. <code>det golden</code> on the console gives a known palm.</div>
+    </div>
+    <div class="caption" id="det-caption"><span>—</span></div>
+    <div class="caption" id="det-hover"><span>score <span class="legend"></span> 0 → 1 · hover an anchor for details</span></div>
+  </section>
+  </div>
 
   <div class="side">
     <section>
@@ -230,7 +259,7 @@ function setState(text, dot) {
 }
 
 function setConnected(on) {
-  for (const id of ["snap", "stream", "fmt", "res", "q", "xclk", "cmd", "refresh"]) $(id).disabled = !on;
+  for (const id of ["snap", "stream", "fmt", "res", "q", "xclk", "cmd", "refresh", "det-get"]) $(id).disabled = !on;
   $("connect").textContent = on ? "Disconnect" : "Connect";
   $("connect").classList.toggle("primary", !on);
   if (!on) setStreaming(false);
@@ -315,7 +344,12 @@ function onDisconnected() {
 function onEvent(ev) {
   const text = dec.decode(ev.target.value);
   log(`< ${text}`, text.startsWith("err") ? "err" : "ok");
-  const [status, cmd, arg] = text.split(" ");
+  const [status, cmd, arg, extra] = text.split(" ");
+  if (status === "det") {  // pushed after every inference: det <seq> <score> hand|none
+    showDetLive(+cmd, +arg, extra === "hand");
+    if ($("det-auto").checked && +cmd !== lastDetSeq) { lastDetSeq = +cmd; send("detsnap"); }
+    return;
+  }
   if (status === "ok" && cmd === "stream") setStreaming(arg === "on");
   if (status === "err" && cmd === "capture") setStreaming(false);
   // Re-read state after anything but snap (the info read would queue
@@ -335,6 +369,14 @@ function showInfo(i) {
     ["JPEG quality", c.q], ["XCLK", `${c.xclk} MHz`],
     ["frames sent", i.frames], ["notify retries", i.retries],
   ];
+  const d = i.det;
+  if (d && d.frames) showDetLive(d.seq, d.score, d.score >= d.thr);
+  if (d) rows.push(
+    ["detector", d.err ? `${d.on ? "on" : "off"}: ${d.err}`
+                       : `${d.on ? "running" : "off"}, ${d.res}×${d.res} input, threshold ${d.thr}`],
+    ["last detection", d.frames ? `${d.score >= d.thr ? "HAND" : "none"} (score ${d.score.toFixed(3)}), `
+                                  + `${d.hits}/${d.frames} frames with hand` : "—"],
+    ["inference", d.frames ? `${d.infer_ms} ms (+ ${d.pre_ms} ms grab/preprocess)` : "—"]);
   $("info").replaceChildren(...rows.map(([k, v]) => {
     const tr = document.createElement("tr");
     const a = document.createElement("td"), b = document.createElement("td");
@@ -398,6 +440,16 @@ async function finishFrame(f) {
     stats.crc++;
     $("m-crc").textContent = stats.crc;
     log(`frame ${f.id}: CRC mismatch`, "err");
+  }
+  if (f.fmt === DET_FORMAT) {
+    try {
+      det = parseDet(f.buf);
+      lastDetSeq = det.seq;
+      renderDet();
+    } catch (e) {
+      log(`detection snapshot: ${e.message}`, "err");
+    }
+    return;
   }
   stats.frames++;
   const now = performance.now();
@@ -480,6 +532,158 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---- detection view ---------------------------------------------------------
+// Snapshot layout: main/detector.h. Anchors are regenerated here exactly
+// like the firmware (model/pipeline/common.py): stride 8 -> 2 per cell,
+// stride 16 -> 6 per cell, cell centres, row-major.
+
+const DET_FORMAT = 0x80;
+const ANCHOR_LAYOUT = [[8, 2], [16, 6]];
+let det = null, lastDetSeq = 0, detGroups = [], detScale = 1;
+
+function parseDet(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (String.fromCharCode(...buf.subarray(0, 4)) !== "DET1") throw new Error("bad magic");
+  const h = {
+    res: dv.getUint16(4, true), n: dv.getUint16(6, true),
+    srcW: dv.getUint16(8, true), srcH: dv.getUint16(10, true),
+    ratio: dv.getFloat32(12, true), left: dv.getInt16(16, true), top: dv.getInt16(18, true),
+    inS: dv.getFloat32(20, true), inZ: dv.getInt32(24, true),
+    boxS: dv.getFloat32(28, true), boxZ: dv.getInt32(32, true),
+    scS: dv.getFloat32(36, true), scZ: dv.getInt32(40, true),
+    thr: dv.getFloat32(44, true), seq: dv.getUint32(48, true), ms: dv.getUint32(52, true),
+    source: buf[56] === 1 ? "golden" : "camera",
+  };
+  let o = 60;
+  const inN = h.res * h.res * 3;
+  if (buf.length < o + inN + h.n * 5) throw new Error(`truncated (${buf.length} bytes)`);
+  h.input = new Int8Array(buf.buffer, buf.byteOffset + o, inN); o += inN;
+  const scores = new Int8Array(buf.buffer, buf.byteOffset + o, h.n); o += h.n;
+  const boxes = new Int8Array(buf.buffer, buf.byteOffset + o, h.n * 4);
+
+  // anchors with decoded score and box (model-input pixels)
+  h.anchors = [];
+  for (const [stride, per] of ANCHOR_LAYOUT) {
+    const f = Math.floor(h.res / stride);
+    for (let y = 0; y < f; y++) for (let x = 0; x < f; x++) for (let k = 0; k < per; k++) {
+      const i = h.anchors.length;
+      const ax = (x + 0.5) / f * h.res, ay = (y + 0.5) / f * h.res;
+      const b = [0, 1, 2, 3].map((j) => (boxes[i * 4 + j] - h.boxZ) * h.boxS);
+      const cx = ax + b[0], cy = ay + b[1];
+      h.anchors.push({
+        i, stride, k, ax, ay,
+        p: 1 / (1 + Math.exp(-(scores[i] - h.scZ) * h.scS)),
+        box: [cx - b[2] / 2, cy - b[3] / 2, cx + b[2] / 2, cy + b[3] / 2],
+      });
+    }
+  }
+  if (h.anchors.length !== h.n) throw new Error(`anchor count ${h.anchors.length} != ${h.n}`);
+  h.best = h.anchors.reduce((a, b) => (b.p > a.p ? b : a));
+  return h;
+}
+
+// 0 blue -> green -> yellow -> 1 red
+const heat = (p, a = 1) => `hsla(${220 - 220 * Math.min(1, Math.max(0, p))}, 85%, 52%, ${a})`;
+
+function renderDet() {
+  if (!det) return;
+  const h = det, cv = $("det-canvas"), ctx = cv.getContext("2d");
+  const S = detScale = Math.max(1, Math.floor(512 / h.res));
+  cv.width = cv.height = h.res * S;
+
+  // model input as the model saw it: pixel = (q - zp) * scale * 255
+  const off = new OffscreenCanvas(h.res, h.res), octx = off.getContext("2d");
+  const img = octx.createImageData(h.res, h.res);
+  for (let i = 0, n = h.res * h.res; i < n; i++) {
+    for (let c = 0; c < 3; c++) {
+      const v = Math.round((h.input[i * 3 + c] - h.inZ) * h.inS * 255);
+      img.data[i * 4 + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
+    img.data[i * 4 + 3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, cv.width, cv.height);
+  ctx.fillStyle = "rgba(0,0,0,0.35)";  // dim, so the overlay reads
+  ctx.fillRect(0, 0, cv.width, cv.height);
+
+  // letterbox content area
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
+  ctx.strokeRect(h.left * S + 0.5, h.top * S + 0.5, h.srcW * h.ratio * S - 1, h.srcH * h.ratio * S - 1);
+  ctx.setLineDash([]);
+
+  // one dot per anchor centre, coloured by the best of the anchors there
+  const groups = new Map();
+  for (const a of h.anchors) {
+    const key = `${a.stride}:${a.ax}:${a.ay}`;
+    const g = groups.get(key);
+    if (!g) groups.set(key, { stride: a.stride, ax: a.ax, ay: a.ay, best: a, all: [a] });
+    else { g.all.push(a); if (a.p > g.best.p) g.best = a; }
+  }
+  detGroups = [...groups.values()];
+  for (const g of detGroups) {
+    if (!$(g.stride === 8 ? "det-s8" : "det-s16").checked) continue;
+    const p = g.best.p, r = (g.stride === 8 ? 1.6 : 3.2) * S * (0.5 + 0.5 * Math.sqrt(p));
+    ctx.beginPath();
+    ctx.arc(g.ax * S, g.ay * S, r, 0, Math.PI * 2);
+    ctx.fillStyle = heat(p, 0.25 + 0.75 * p);
+    ctx.fill();
+    if (g.stride === 16) { ctx.strokeStyle = heat(p, 0.6); ctx.lineWidth = 1; ctx.stroke(); }
+  }
+
+  // boxes above threshold; the best one bold + labelled
+  const above = h.anchors.filter((a) => a.p >= h.thr);
+  if ($("det-boxes").checked) {
+    for (const a of above) {
+      if (!$(a.stride === 8 ? "det-s8" : "det-s16").checked) continue;
+      ctx.strokeStyle = heat(a.p, 0.7); ctx.lineWidth = 1;
+      ctx.strokeRect(a.box[0] * S, a.box[1] * S, (a.box[2] - a.box[0]) * S, (a.box[3] - a.box[1]) * S);
+    }
+    const b = h.best;
+    if (b.p >= h.thr) {
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+      ctx.strokeRect(b.box[0] * S, b.box[1] * S, (b.box[2] - b.box[0]) * S, (b.box[3] - b.box[1]) * S);
+      ctx.font = `${Math.max(12, 3 * S)}px ui-monospace, monospace`;
+      ctx.fillStyle = "#fff";
+      ctx.fillText(b.p.toFixed(2), b.box[0] * S + 4, b.box[1] * S + Math.max(14, 4 * S));
+    }
+  }
+
+  cv.hidden = false;
+  $("det-empty").hidden = true;
+  const parts = [`#${h.seq}`, h.source, `${h.res}×${h.res}`, `${h.n} anchors`, `infer ${h.ms} ms`,
+                 `best ${h.best.p.toFixed(3)} (anchor ${h.best.i}, stride ${h.best.stride})`,
+                 `${above.length} ≥ thr ${h.thr.toFixed(2)}`, h.best.p >= h.thr ? "HAND" : "no hand"];
+  $("det-caption").replaceChildren(...parts.map((t) => {
+    const s = document.createElement("span"); s.textContent = t; return s;
+  }));
+}
+
+function showDetLive(seq, score, hand) {
+  const el = $("det-live");
+  el.textContent = `${hand ? "HAND" : "no hand"} ${score.toFixed(2)} · #${seq}`;
+  el.classList.toggle("hand", hand);
+}
+
+function detHover(ev) {
+  if (!det) return;
+  const cv = $("det-canvas"), r = cv.getBoundingClientRect();
+  const mx = (ev.clientX - r.left) / r.width * det.res, my = (ev.clientY - r.top) / r.height * det.res;
+  let near = null, dmin = Infinity;
+  for (const g of detGroups) {
+    if (!$(g.stride === 8 ? "det-s8" : "det-s16").checked) continue;
+    const d = Math.hypot(g.ax - mx, g.ay - my);
+    if (d < dmin) { dmin = d; near = g; }
+  }
+  if (!near || dmin > near.stride) return;
+  const b = near.best.box.map((v) => v.toFixed(1)).join(", ");
+  const scores = near.all.map((a) => a.p.toFixed(3)).join(" ");
+  $("det-hover").replaceChildren(Object.assign(document.createElement("span"), {
+    textContent: `stride ${near.stride} cell @ (${near.ax.toFixed(0)}, ${near.ay.toFixed(0)}) · ` +
+                 `anchors ${near.all[0].i}–${near.all[near.all.length - 1].i} · scores ${scores} · best box [${b}]`,
+  }));
+}
+
 // ---- wiring -----------------------------------------------------------------
 
 $("connect").onclick = () => (device?.gatt.connected ? device.gatt.disconnect() : connect());
@@ -490,6 +694,9 @@ $("res").onchange = (e) => send(`res ${e.target.value}`);
 $("q").onchange = (e) => send(`q ${e.target.value}`);
 $("xclk").onchange = (e) => send(`xclk ${e.target.value}`);
 $("refresh").onclick = refreshInfo;
+$("det-get").onclick = () => send("detsnap");
+for (const id of ["det-s8", "det-s16", "det-boxes"]) $(id).onchange = renderDet;
+$("det-canvas").addEventListener("mousemove", detHover);
 $("cmd-form").onsubmit = (e) => {
   e.preventDefault();
   const v = $("cmd").value.trim();

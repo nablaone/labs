@@ -19,6 +19,13 @@ added on top.
   `ble_link.h`) to `web/index.html` (Web Bluetooth, `make web`). Add new
   diagnostics as text commands there. All camera access goes through
   `camera_grab()`/`camera_release()` (mutex) so mode changes are safe.
+- Palm detector (`main/detector.cc`): OpenCV-zoo ONNX model converted by
+  `model/` (all Python/TF in the `handdetector-model` container, never on
+  the host) and run with upstream TFLM reference kernels -- the user
+  explicitly does not want Espressif ML libraries (ESP-NN,
+  esp-tflite-micro, ESP-DL). The .tflite lives in the `model` partition,
+  not in the firmware. `make -C model tflm` must run before the first
+  firmware build. Findings and numbers: `docs/model-pipeline.md`.
 - Build in Docker (`make build`). Flash and monitor natively (`make flash`,
   `make monitor`).
 - One `.c/.h` per module: `xxx_init()`, `xxx_task()`,

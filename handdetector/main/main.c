@@ -11,6 +11,7 @@
 #include "pmic.h"
 #include "camera.h"
 #include "ble_link.h"
+#include "detector.h"
 
 static const char *TAG = "main";
 
@@ -39,11 +40,16 @@ void app_main(void)
 	pmic_register_cli_commands();
 	camera_register_cli_commands();
 	camera_init();
+	detector_init();
+	detector_register_cli_commands();
 	ble_link_init();
 	ble_link_register_cli_commands();
 
 	xTaskCreate(heartbeat_task, "heartbeat", 2048, NULL, 5, NULL);
 	xTaskCreate(ble_link_task, "ble_link", 4096, NULL, 5, NULL);
+	/* Core 1, low priority: one inference takes seconds of pure CPU, and
+	 * core 0 keeps BLE, the console and the task watchdog's idle check. */
+	xTaskCreatePinnedToCore(detector_task, "detector", 16384, NULL, 2, NULL, 1);
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);
 
 	ESP_LOGI(TAG, "handdetector %s up -- press Enter for the CLI", FIRMWARE_VERSION);
