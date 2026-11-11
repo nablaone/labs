@@ -143,8 +143,10 @@ Status: it runs and is **bit-exact** with host LiteRT's reference kernels
 an inference at 96×96 takes **2.6 s** (34 s on reference kernels only;
 137 s at the original 192×192).
 A result describes the frame grabbed when that inference started, so hold
-a hand still for ~25 s to be sure of catching a whole cycle. Stages, surgery,
-findings and profiles are in [docs/model-pipeline.md](docs/model-pipeline.md).
+a hand still for ~6 s to be sure of catching a whole cycle. Stages,
+surgery, findings and profiles are in
+[docs/model-pipeline.md](docs/model-pipeline.md); how it got from 137 s to
+2.6 s is in [docs/performance.md](docs/performance.md).
 The `det` console command shows status and timing, and `det prof` gives
 per-op time.
 
