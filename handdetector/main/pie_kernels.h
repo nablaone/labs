@@ -60,6 +60,12 @@ TFLMRegistration PieRegister_MUL();
 TFLMRegistration PieRegister_PRELU();
 void pie_elementwise_reset_stats(void);
 void pie_elementwise_print_stats(void);
+/* MAX_POOL_2D, PAD, RESIZE_BILINEAR (pie_data.cc). */
+TFLMRegistration PieRegister_MAX_POOL_2D();
+TFLMRegistration PieRegister_PAD();
+TFLMRegistration PieRegister_RESIZE_BILINEAR();
+void pie_data_reset_stats(void);
+void pie_data_print_stats(void);
 
 extern "C" {
 /* Runtime switch (`det pie on|off`): off = every layer uses the

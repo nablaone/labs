@@ -1,7 +1,7 @@
 # Making the palm detector fast on the ESP32-S3
 
 How one inference of the OpenCV-zoo palm detector went from **137 s** to
-**0.78 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
+**0.66 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
 uses upstream TensorFlow Lite Micro and no vendor ML libraries. The model
 pipeline itself is in [model-pipeline.md](model-pipeline.md).
 
@@ -64,10 +64,11 @@ Per-op profile at 96×96 (`det prof`):
 | + native PRELU (different converter output) | 1.63 s | 1.6× |
 | + fast exact requantization, cache-blocked pointwise | 1.04 s | 1.6× |
 | + both CPU cores | 0.81 s | 1.28× |
-| + CONV→ADD→PRELU fusion | **0.78 s** | 1.06× |
+| + CONV→ADD→PRELU fusion | 0.78 s | 1.06× |
+| + own MAX_POOL / PAD / RESIZE | **0.66 s** | 1.18× |
 
-Overall: **43× faster than reference kernels at the same input size,
-175× faster than the starting point.**
+Overall: **51× faster than reference kernels at the same input size,
+207× faster than the starting point.**
 
 ### 1. Smaller input: 192 → 96
 
@@ -304,21 +305,58 @@ now inside the conv's loop. The passes it saves (one write and two
 read/write pairs of a mostly-cached tensor per block) were a smaller part
 of ADD/PRELU's 175 ms than the arithmetic.
 
+### 9. Own MAX_POOL, PAD and RESIZE (0.78 → 0.66 s)
+
+After the convolutions got fast, the three remaining TFLM reference ops
+were 135 ms, 17% of the inference, for work that is almost pure memory
+movement: onnx2tf leaves their input and output qparams equal, so there
+is no requantization. The reference versions are generic N-d loops with
+an `Offset()` call per element, on one core. `main/pie_data.cc`:
+
+- **MAX_POOL_2D** (2×2, stride 2, VALID; 4 layers): per output pixel and
+  16 channels, four 16-byte loads and three `ee.vmax.s8`. Same activation
+  clamp as the reference (a no-op here, so the SIMD path requires it to
+  be the full int8 range).
+- **PAD** (8 layers): the model pads either H/W by (1, 2) before the
+  stride-2 depthwise convs, or channels (32 → 64 etc.) on the residual
+  skip path. Rows of padding are one `memset`, interior pixels
+  `memset` + `memcpy` + `memset`. Pad value as TFLM: the output zero
+  point.
+- **RESIZE_BILINEAR** (2× up, half-pixel centers; 2 layers): TFLM's
+  integer formula with source indices and 10-bit weights computed once
+  per row and column, the per-channel sum in 32 bits (it can't overflow:
+  |v| ≤ 128 and the absolute weights sum to < 1536²), and the same
+  symmetric rounding.
+
+All split across both cores and checked by `det pie verify on`.
+
+| op | before | after |
+|---|---|---|
+| MAX_POOL_2D (4) | 55 ms | 3.5 ms |
+| PAD (8) | 41 ms | 9.9 ms |
+| RESIZE_BILINEAR (2) | 39 ms | 6.8 ms |
+| inference (golden) | 781 ms | **663 ms** |
+| live detector | 770 ms | **657 ms** |
+
+The first version kept RESIZE's two 128-entry tap tables (4 KB) on the
+stack and crashed: `det golden` runs on the console task, whose stack
+is smaller than the detector's. They are static now.
+
 ## Current status
 
-96×96, 0.78 s per inference (`det prof`, golden input):
+96×96, 0.66 s per inference (`det prof`, golden input):
 
 | op | ms | % | kernel |
 |---|---|---|---|
-| CONV_2D (30) | 340 | 43.5 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
-| DEPTHWISE_CONV_2D (23) | 265 | 33.9 | PIE, 2 cores |
-| MAX_POOL_2D (4) | 55 | 7.1 | reference, 1 core |
-| PAD (8) | 41 | 5.3 | reference, 1 core |
-| RESIZE_BILINEAR (2) | 39 | 5.0 | reference, 1 core |
-| ADD (25: 4 unfused) | 30 | 3.9 | LUT + requant, 2 cores |
-| PRELU (26: 4 unfused) | 11 | 1.4 | LUT, 2 cores |
+| CONV_2D (30) | 338 | 51.0 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
+| DEPTHWISE_CONV_2D (23) | 264 | 39.8 | PIE, 2 cores |
+| ADD (25: 4 unfused) | 30 | 4.5 | LUT + requant, 2 cores |
+| PRELU (26: 4 unfused) | 11 | 1.6 | LUT, 2 cores |
+| PAD (8) | 9.9 | 1.5 | own, 2 cores |
+| RESIZE_BILINEAR (2) | 6.8 | 1.0 | own, 2 cores |
+| MAX_POOL_2D (4) | 3.5 | 0.5 | PIE, 2 cores |
 | CONCAT, RESHAPE | 0.2 | 0.0 | reference |
-| **total** | **781** | | |
+| **total** | **663** | | |
 
 Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
 preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
@@ -328,14 +366,12 @@ about every 0.87 s.
 
 Ordered by expected payoff:
 
-1. **Reference ops** (MAX_POOL, PAD, RESIZE): 135 ms on one core, 17% now.
-   All three are simple to write directly and to split across cores.
-2. **Depthwise** (265 ms): a padded copy of every input, QACC write-out
+1. **Depthwise** (264 ms): a padded copy of every input, QACC write-out
    and 20-bit unpacking in C, 25 load pairs per 16 channels.
-3. **Pointwise inner loop:** fused load+multiply
+2. **Pointwise inner loop:** fused load+multiply
    (`ee.vmulas.s8.accx.ld.ip`), several outputs per input load, the
    zero-overhead `loop`.
-4. **PSRAM traffic:** both cores share it (each runs ~40% slower when
+3. **PSRAM traffic:** both cores share it (each runs ~40% slower when
    both work). Small late-layer tensors in internal RAM, or the 64 KB
    data cache.
 

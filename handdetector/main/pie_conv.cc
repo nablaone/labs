@@ -650,6 +650,7 @@ extern "C" void pie_print_stats(void)
 		if (count[k]) printf("%-9s %2d layers %10.1f ms\n", kind_name[k], count[k], us[k] / 1e3);
 	if (verify) printf("%s\n", bad ? "VERIFY MISMATCH" : "verify: all PIE layers bit-exact");
 	pie_elementwise_print_stats();
+	pie_data_print_stats();
 	pie_parallel_print_stats();
 	pie_fusion_print();
 }

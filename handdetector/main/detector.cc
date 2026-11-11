@@ -213,13 +213,13 @@ void detector_init(void)
 	ops.AddConcatenation();
 	ops.AddConv2D(PieRegister_CONV_2D());  /* PIE SIMD paths, see pie_conv.cc */
 	ops.AddDepthwiseConv2D(PieRegister_DEPTHWISE_CONV_2D());
-	ops.AddMaxPool2D();
+	ops.AddMaxPool2D(PieRegister_MAX_POOL_2D());  /* see pie_data.cc */
 	ops.AddMul(PieRegister_MUL());
-	ops.AddPad();
+	ops.AddPad(PieRegister_PAD());
 	ops.AddPrelu(PieRegister_PRELU());  /* native PRELU (flatbuffer_direct models) */
 	ops.AddRelu(PieRegister_RELU());
 	ops.AddReshape();
-	ops.AddResizeBilinear();
+	ops.AddResizeBilinear(PieRegister_RESIZE_BILINEAR());
 	ops.AddSub(PieRegister_SUB());
 	ops.AddTranspose();
 
@@ -437,6 +437,7 @@ static void run_once(void)
 	memcpy(pending_in, t_in->data.int8, (size_t)res * res * 3);
 	profiler.Reset();
 	pie_elementwise_reset_stats();
+	pie_data_reset_stats();
 	pie_parallel_reset_stats();
 	int64_t t2 = esp_timer_get_time();
 	TfLiteStatus rc = interpreter->Invoke();
@@ -520,6 +521,7 @@ static int run_golden(void)
 	memcpy(pending_in, in, len[0]);
 	profiler.Reset();
 	pie_elementwise_reset_stats();
+	pie_data_reset_stats();
 	pie_parallel_reset_stats();
 	int64_t t0 = esp_timer_get_time();
 	TfLiteStatus rc = interpreter->Invoke();
