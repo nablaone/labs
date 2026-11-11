@@ -438,6 +438,7 @@ TFLMRegistration PieRegister_DEPTHWISE_CONV_2D()
 extern "C" void pie_set_enabled(bool on) { enabled = on; }
 extern "C" bool pie_enabled(void) { return enabled; }
 extern "C" void pie_set_verify(bool on) { verify = on; }
+extern "C" bool pie_verify_enabled(void) { return verify; }
 
 extern "C" void pie_print_stats(void)
 {
@@ -459,4 +460,5 @@ extern "C" void pie_print_stats(void)
 	for (int k = 0; k < 4; k++)
 		if (count[k]) printf("%-9s %2d layers %10.1f ms\n", kind_name[k], count[k], us[k] / 1e3);
 	if (verify) printf("%s\n", bad ? "VERIFY MISMATCH" : "verify: all PIE layers bit-exact");
+	pie_elementwise_print_stats();
 }

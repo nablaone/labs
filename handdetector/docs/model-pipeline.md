@@ -179,18 +179,35 @@ a pixel's IC channels with a filter row.
 Each output pixel's 75 input bytes (zero point for padding) are gathered
 into a 16-aligned row of 80, then the ACCX dot product as for pointwise.
 
-| 96×96 inference | reference kernels | + PIE pointwise | + PIE depthwise, im2col |
-|---|---|---|---|
-| total | 33.8 s | 11.7 s | **3.9 s** (8.7×) |
-| pointwise 1×1 (29 layers) | ~22.8 s | 0.66 s | 0.70 s |
-| depthwise 5×5 (23 layers) | 5.6 s | 5.6 s | **0.40 s** (14×) |
-| first conv 5×5 s2 | 2.7 s | 2.7 s | **0.053 s** (51×) |
-| ADD/SUB/ABS/MUL/RELU (reference) | 2.3 s | 2.3 s | 2.36 s |
-| TRANSPOSE, pooling, resize (reference) | 0.4 s | 0.4 s | 0.38 s |
-| correctness | bit-exact | bit-exact | **bit-exact** (`det golden`; `det pie verify on`: 0 mismatches in all 53 conv layers) |
+**Elementwise ABS/RELU/ADD/SUB/MUL** (155 layers, the PRelu
+decomposition): lookup tables, `main/pie_elementwise.cc`. Not SIMD; the
+point is that an int8 input has only 256 values.
+- **ABS, RELU:** `out = T[x]`. The table is made by running TFLM's own
+  kernel once on all 256 inputs (tensor data and dims swapped in for the
+  call), so it's exact by construction.
+- **ADD, SUB:** the reference rescales each input, adds, and requantizes
+  the sum: three 64-bit fixed-point multiplies per element, through a
+  function pointer. The two input rescales become 256-entry int32 tables;
+  only the final requantization stays per element.
+- **MUL** by the per-channel PRelu slope: one 256-entry table per channel
+  when a channel has ≥ 64 elements, the same formula inline otherwise.
 
-Now the convolutions are 30% of the time; the PRelu decomposition
-(ADD/SUB/ABS/MUL/RELU) and the TRANSPOSEs around it are 68%.
+| 96×96 inference | reference | + PIE pointwise | + PIE depthwise, im2col | + elementwise LUTs |
+|---|---|---|---|---|
+| total | 33.8 s | 11.7 s | 3.9 s | **2.6 s** (13×) |
+| pointwise 1×1 (29 layers) | ~22.8 s | 0.66 s | 0.70 s | 0.69 s |
+| depthwise 5×5 (23 layers) | 5.6 s | 5.6 s | 0.40 s | 0.44 s |
+| first conv 5×5 s2 | 2.7 s | 2.7 s | 0.053 s | 0.052 s |
+| ADD (51) / SUB (26) | 1.6 s | 1.6 s | 1.62 s | **0.84 s** |
+| ABS / RELU / MUL (26 each) | 0.74 s | 0.74 s | 0.74 s | **0.20 s** |
+| TRANSPOSE (56), pooling, resize (reference) | 0.4 s | 0.4 s | 0.38 s | 0.38 s |
+
+Correctness: `det golden` bit-exact at every step; `det pie verify on`
+re-runs the reference kernel after every PIE/LUT layer and compares: 0
+mismatches in all 53 conv and 155 elementwise layers.
+
+What's left is about evenly spread: convolutions 46%, ADD/SUB 32% (one
+fixed-point requantization per element), TRANSPOSE 11%.
 
 `det pie off` switches back to the reference kernels for A/B timing.
 `det pie stats` gives per-layer path and time.
@@ -207,16 +224,16 @@ vs host LiteRT (reference kernels): boxes 0/2016 differ, scores 0/504 differ, ma
 
 ## Next steps (ideas, not done)
 
-- **Elementwise ADD/SUB/MUL/ABS/RELU** (now 61%): exact lookup tables
-  (an int8 input has only 256 values, so each input's rescale is a table;
-  only the final requantization stays per element), or a native PRELU
-  (one op instead of five, and no TRANSPOSEs around it).
+- **Native PRELU** instead of the five-op decomposition: ~180 ops and
+  the TRANSPOSEs around them gone (onnx2tf's `flatbuffer_direct` writer
+  emits PRELU, but needs its rank-1 `quantized_dimension` bug patched).
+- **ADD/SUB requantization:** a cheaper exact form of the per-element
+  fixed-point multiply (32-bit high-multiply instead of generic int64).
 - **Pointwise tuning:** fused load+MAC (`ee.vmulas.s8.accx.ld.ip`), keep
   the pixel vector in `q` registers across output channels, zero-overhead
   `loop`.
 - **SRAM arena:** at 96 the arena is 375 KB. Putting the hot tensors in
   internal RAM avoids PSRAM latency.
-- **Native PRELU:** -7% time and fewer intermediate tensors.
 - **Calibration data:** more frames from our own camera, with hands.
 
 ## Device commands

@@ -15,6 +15,14 @@
 
 TFLMRegistration PieRegister_CONV_2D();
 TFLMRegistration PieRegister_DEPTHWISE_CONV_2D();
+/* Elementwise ops via lookup tables (pie_elementwise.cc). */
+TFLMRegistration PieRegister_ABS();
+TFLMRegistration PieRegister_RELU();
+TFLMRegistration PieRegister_ADD();
+TFLMRegistration PieRegister_SUB();
+TFLMRegistration PieRegister_MUL();
+void pie_elementwise_reset_stats(void);
+void pie_elementwise_print_stats(void);
 
 extern "C" {
 /* Runtime switch (`det pie on|off`): off = every layer uses the
@@ -24,6 +32,7 @@ bool pie_enabled(void);
 /* Verify mode (`det pie verify`): after each PIE layer, rerun the
  * reference kernel on the same input and count differing output bytes. */
 void pie_set_verify(bool on);
+bool pie_verify_enabled(void);
 /* Per-layer stats of the last inference. */
 void pie_print_stats(void);
 }

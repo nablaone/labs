@@ -204,18 +204,18 @@ void detector_init(void)
 	 * ABS/MUL/RELU/SUB come from onnx2tf's tf_converter path
 	 * decomposing PRelu: prelu(x) = relu(x) - alpha * relu(-x) style. */
 	static tflite::MicroMutableOpResolver<13> ops;
-	ops.AddAbs();
-	ops.AddAdd();
+	ops.AddAbs(PieRegister_ABS());  /* lookup tables, see pie_elementwise.cc */
+	ops.AddAdd(PieRegister_ADD());
 	ops.AddConcatenation();
 	ops.AddConv2D(PieRegister_CONV_2D());  /* PIE SIMD paths, see pie_conv.cc */
 	ops.AddDepthwiseConv2D(PieRegister_DEPTHWISE_CONV_2D());
 	ops.AddMaxPool2D();
-	ops.AddMul();
+	ops.AddMul(PieRegister_MUL());
 	ops.AddPad();
-	ops.AddRelu();
+	ops.AddRelu(PieRegister_RELU());
 	ops.AddReshape();
 	ops.AddResizeBilinear();
-	ops.AddSub();
+	ops.AddSub(PieRegister_SUB());
 	ops.AddTranspose();
 
 	uint8_t *arena = (uint8_t *)heap_caps_aligned_alloc(16, ARENA_SIZE, MALLOC_CAP_SPIRAM);
@@ -431,6 +431,7 @@ static void run_once(void)
 	Letterbox lb = preprocess(w, h);
 	memcpy(pending_in, t_in->data.int8, (size_t)res * res * 3);
 	profiler.Reset();
+	pie_elementwise_reset_stats();
 	int64_t t2 = esp_timer_get_time();
 	TfLiteStatus rc = interpreter->Invoke();
 	int64_t t3 = esp_timer_get_time();
@@ -512,6 +513,7 @@ static int run_golden(void)
 	memcpy(t_in->data.int8, in, len[0]);
 	memcpy(pending_in, in, len[0]);
 	profiler.Reset();
+	pie_elementwise_reset_stats();
 	int64_t t0 = esp_timer_get_time();
 	TfLiteStatus rc = interpreter->Invoke();
 	int64_t dt = esp_timer_get_time() - t0;
