@@ -21,6 +21,7 @@
 #include "camera.h"
 #include "pie_kernels.h"
 #include "pie_parallel.h"
+#include "pie_fusion.h"
 #include "heartbeat_task.h"
 #include "detector.h"
 
@@ -167,6 +168,7 @@ static bool map_model(void)
 			 (unsigned long)model->version(), TFLITE_SCHEMA_VERSION);
 		return false;
 	}
+	pie_fusion_set_model(model);  /* tensor consumer counts for op fusion */
 	ESP_LOGI(TAG, "model mapped from flash 0x%lx (%lu KB partition)",
 		 (unsigned long)part->address, (unsigned long)part->size / 1024);
 	return true;
@@ -578,6 +580,7 @@ static int cmd_det(int argc, char **argv)
 		else if (strcmp(a, "verify") == 0) pie_set_verify(argc > 3 && strcmp(argv[3], "on") == 0);
 		else if (strcmp(a, "bench") == 0) pie_microbench();
 		else if (strcmp(a, "cores") == 0 && argc > 3) pie_parallel_set_cores(atoi(argv[3]));
+		else if (strcmp(a, "fuse") == 0 && argc > 3) pie_fusion_set_enabled(strcmp(argv[3], "on") == 0);
 		else pie_print_stats();
 		printf("PIE kernels %s, %d core%s\n", pie_enabled() ? "on" : "off", pie_parallel_cores(), pie_parallel_cores() > 1 ? "s" : "");
 		return 0;
@@ -622,7 +625,7 @@ static int cmd_det(int argc, char **argv)
 		return 0;
 	}
 	if (sub[0]) {
-		printf("usage: det [on|off|thr <0..1>|prof|golden|dump|pie [on|off|stats|verify on|off|bench|cores 1|2]]\n");
+		printf("usage: det [on|off|thr <0..1>|prof|golden|dump|pie [on|off|stats|verify on|off|bench|cores 1|2|fuse on|off]]\n");
 		return 1;
 	}
 	printf("state      %s%s%s\n", enabled ? "running" : interpreter ? "off" : "no model",
@@ -644,7 +647,7 @@ void detector_register_cli_commands(void)
 {
 	const esp_console_cmd_t cmd = {
 		.command = "det",
-		.help = "Palm detector: status | on | off | thr <0..1> | prof (per-op timing of the last inference) | golden (compare with host LiteRT) | dump (last snapshot as hex) | pie on/off/stats/verify on/off/bench/cores 1|2",
+		.help = "Palm detector: status | on | off | thr <0..1> | prof (per-op timing of the last inference) | golden (compare with host LiteRT) | dump (last snapshot as hex) | pie on/off/stats/verify on/off/bench/cores 1|2/fuse on|off",
 		.hint = NULL,
 		.func = &cmd_det,
 		.argtable = NULL,

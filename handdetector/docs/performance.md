@@ -1,7 +1,7 @@
 # Making the palm detector fast on the ESP32-S3
 
 How one inference of the OpenCV-zoo palm detector went from **137 s** to
-**0.81 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
+**0.78 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
 uses upstream TensorFlow Lite Micro and no vendor ML libraries. The model
 pipeline itself is in [model-pipeline.md](model-pipeline.md).
 
@@ -63,10 +63,11 @@ Per-op profile at 96×96 (`det prof`):
 | + lookup-table elementwise ops | 2.6 s | 1.5× |
 | + native PRELU (different converter output) | 1.63 s | 1.6× |
 | + fast exact requantization, cache-blocked pointwise | 1.04 s | 1.6× |
-| + both CPU cores | **0.81 s** | 1.28× |
+| + both CPU cores | 0.81 s | 1.28× |
+| + CONV→ADD→PRELU fusion | **0.78 s** | 1.06× |
 
-Overall: **42× faster than reference kernels at the same input size,
-169× faster than the starting point.**
+Overall: **43× faster than reference kernels at the same input size,
+175× faster than the starting point.**
 
 ### 1. Smaller input: 192 → 96
 
@@ -257,42 +258,86 @@ is busy. Both share the cache and the PSRAM bus, and the activations live
 in PSRAM. The memory-bound ops (ADD, PRELU: a table lookup per byte)
 barely gain; the compute-heavy convolutions gain the most.
 
+### 8. Operator fusion (0.83 → 0.78 s)
+
+Fusing elementwise work into the producing op's output step is standard:
+TFLite fuses ReLU/ReLU6 into conv (`fused_activation_function`),
+converters fold BatchNorm into conv weights, and TensorRT, oneDNN
+("post-ops"), XNNPACK and TVM fuse residual adds and activations. The
+point is memory: each separate elementwise op is a full extra read and
+write of a tensor.
+
+This model's blocks are DEPTHWISE → CONV 1×1 → ADD(skip) → PRELU (23×),
+plus 3 CONV → PRELU. In each, the intermediate tensors have exactly one
+reader. With fusion (`main/pie_fusion.cc`), the conv's output step
+computes per element:
+
+```
+c   = requant(conv)                       what CONV would store
+a   = requant(r_skip[skip] + r_conv[c])   what ADD would store
+out = prelu_table[a][channel]             what PRELU would store
+```
+
+It writes only `out`, so it's bit-exact with the separate ops.
+- **Learning the chains:** the first inference runs unfused. ADD and PRELU
+  record their tables in the producing conv's entry, but only if the
+  intermediate tensor has exactly one consumer (counted from the model).
+  From then on the conv does the chain, and ADD/PRELU return immediately.
+- **Safety:** TFLM's memory planner may put the final tensor on top of
+  the conv's input, which is still being read. The conv checks the real
+  buffer addresses and fuses only if there's no overlap with its input,
+  and either none with the skip tensor or exactly on it (in place, same
+  index). 21 ADDs and 22 PRELUs fuse; the rest run separately.
+- **Switches:** off in verify mode (that compares each op's own output);
+  `det pie fuse on|off` for A/B.
+
+| | unfused | fused |
+|---|---|---|
+| CONV_2D | 240 ms | 340 ms (now includes the ADD/PRELU work) |
+| ADD + PRELU | 175 ms | 41 ms (only the unfused ones left) |
+| inference (golden) | 830 ms | **781 ms** |
+| live detector | 812 ms | **770 ms** |
+
+**Smaller than expected (−6%).** Fusion only removes the memory passes.
+Each element still needs the ADD requantization and two table lookups,
+now inside the conv's loop. The passes it saves (one write and two
+read/write pairs of a mostly-cached tensor per block) were a smaller part
+of ADD/PRELU's 175 ms than the arithmetic.
+
 ## Current status
 
-96×96, 0.81 s per inference (`det prof`):
+96×96, 0.78 s per inference (`det prof`, golden input):
 
 | op | ms | % | kernel |
 |---|---|---|---|
-| DEPTHWISE_CONV_2D (23) | 265 | 32.5 | PIE, 2 cores |
-| CONV_2D (30) | 240 | 29.4 | PIE pointwise + im2col, 2 cores |
-| ADD (25) | 124 | 15.2 | LUT + requant, 2 cores |
-| MAX_POOL_2D (4) | 55 | 6.7 | reference, 1 core |
-| PRELU (26) | 52 | 6.3 | LUT, 2 cores |
-| PAD (8) | 42 | 5.1 | reference, 1 core |
-| RESIZE_BILINEAR (2) | 39 | 4.7 | reference, 1 core |
+| CONV_2D (30) | 340 | 43.5 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
+| DEPTHWISE_CONV_2D (23) | 265 | 33.9 | PIE, 2 cores |
+| MAX_POOL_2D (4) | 55 | 7.1 | reference, 1 core |
+| PAD (8) | 41 | 5.3 | reference, 1 core |
+| RESIZE_BILINEAR (2) | 39 | 5.0 | reference, 1 core |
+| ADD (25: 4 unfused) | 30 | 3.9 | LUT + requant, 2 cores |
+| PRELU (26: 4 unfused) | 11 | 1.4 | LUT, 2 cores |
 | CONCAT, RESHAPE | 0.2 | 0.0 | reference |
-| **total** | **815** | | |
+| **total** | **781** | | |
 
 Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
 preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
-about every 0.9 s.
+about every 0.87 s.
 
 ## What's left
 
 Ordered by expected payoff:
 
-1. **PSRAM traffic** is now the wall for both cores. Ideas: fuse PRELU
-   and ADD into the conv that produces their input (a whole pass over
-   memory each saved), keep small late-layer tensors in internal RAM, try
-   the 64 KB data cache setting.
-2. **Reference ops** (MAX_POOL, PAD, RESIZE): 136 ms on one core, 17% now.
+1. **Reference ops** (MAX_POOL, PAD, RESIZE): 135 ms on one core, 17% now.
    All three are simple to write directly and to split across cores.
-3. **Depthwise** still ~167 cycles per output on one core: a padded copy
-   of every input, QACC write-out and 20-bit unpacking in C, 25 load
-   pairs per 16 channels.
-4. **Pointwise inner loop:** fused load+multiply
+2. **Depthwise** (265 ms): a padded copy of every input, QACC write-out
+   and 20-bit unpacking in C, 25 load pairs per 16 channels.
+3. **Pointwise inner loop:** fused load+multiply
    (`ee.vmulas.s8.accx.ld.ip`), several outputs per input load, the
    zero-overhead `loop`.
+4. **PSRAM traffic:** both cores share it (each runs ~40% slower when
+   both work). Small late-layer tensors in internal RAM, or the 64 KB
+   data cache.
 
 ## Pitfalls hit along the way
 

@@ -49,6 +49,7 @@
 
 #include "pie_kernels.h"
 #include "pie_parallel.h"
+#include "pie_fusion.h"
 
 namespace {
 
@@ -77,6 +78,7 @@ struct Layer {
 	Kind kind;
 	int64_t us;
 	int mismatches;   /* verify mode */
+	bool fused;       /* did ADD/PRELU in its output step (pie_fusion.h) */
 };
 constexpr int kMaxLayers = 64;
 Layer layers[kMaxLayers];
@@ -109,6 +111,18 @@ int8_t *get_scratch(size_t n)
 	return scratch;
 }
 
+size_t flat_size(const TfLiteEvalTensor *t)
+{
+	size_t n = 1;
+	for (int i = 0; i < t->dims->size; i++) n *= t->dims->data[i];
+	return n;
+}
+
+bool overlaps(const int8_t *a, size_t na, const int8_t *b, size_t nb)
+{
+	return a < b + nb && b < a + na;
+}
+
 inline int32_t requant(int32_t acc, int32_t mult, int32_t shift, int32_t out_off, int32_t lo, int32_t hi)
 {
 	acc = pie_mbqm(acc, mult, shift) + out_off;
@@ -137,14 +151,40 @@ inline int32_t dot_s8(const int8_t *x, const int8_t *w, int n16)
 }
 
 /* x . w[o] for every output channel o of one pixel. */
-inline void dot_all(const Layer *L, const micro::OpDataConv &d, const int8_t *x, int n16, int8_t *out)
+/* Fused output step (pie_fusion.h): the conv's int8 result c goes on
+ * through the residual ADD and/or the PRELU table before it's stored. */
+struct Epi {
+	const int8_t *skip;          /* ADD's other input, same layout as the output */
+	const int32_t *rs, *rc;      /* ADD rescale tables, indexed by int8 value */
+	int32_t om, os, oo, lo, hi;  /* ADD output requantization */
+	bool add;
+	const int8_t *pt;            /* PRELU table [256][C], or null */
+	int C;
+};
+
+inline int8_t epi_apply(const Epi *e, int32_t c, size_t idx, int ch)
+{
+	if (e->add) {
+		c = pie_mbqm(e->rs[e->skip[idx]] + e->rc[c], e->om, e->os) + e->oo;
+		c = c < e->lo ? e->lo : c > e->hi ? e->hi : c;
+	}
+	if (e->pt) c = e->pt[(c + 128) * e->C + ch];
+	return (int8_t)c;
+}
+
+/* x . w[o] for every output channel o of one pixel; out/idx0 = where
+ * that pixel's outputs go (element index for the fused epilogue). */
+inline void dot_all(const Layer *L, const micro::OpDataConv &d, const int8_t *x, int n16, int8_t *out,
+		    const Epi *e, size_t idx0)
 {
 	const int8_t *w = L->w;
 	const int stride = n16 * 16;
-	for (int o = 0; o < L->oc; o++, w += stride)
-		*out++ = (int8_t)requant(dot_s8(x, w, n16) + L->bias[o],
-					 d.per_channel_output_multiplier[o], d.per_channel_output_shift[o],
-					 d.output_zero_point, d.output_activation_min, d.output_activation_max);
+	for (int o = 0; o < L->oc; o++, w += stride) {
+		int32_t c = requant(dot_s8(x, w, n16) + L->bias[o],
+				    d.per_channel_output_multiplier[o], d.per_channel_output_shift[o],
+				    d.output_zero_point, d.output_activation_min, d.output_activation_max);
+		out[o] = e ? epi_apply(e, c, idx0 + o, o) : (int8_t)c;
+	}
 }
 
 /* ---- CONV_2D ---- */
@@ -198,14 +238,15 @@ bool prepare_conv(Layer *L, Kind kind, const TfLiteEvalTensor *filter, const TfL
  * pixel order. */
 constexpr size_t kWeightBlock = 16 * 1024;
 
-void pointwise_range(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int p0, int p1)
+void pointwise_range(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int p0, int p1,
+		     const Epi *e)
 {
 	const int ic = L->ic, oc = L->oc, n16 = ic / 16;
 	int block = (int)(kWeightBlock / ic);
 	if (block < 1) block = 1;
 	if (block >= oc) {
 		for (int p = p0; p < p1; p++)
-			dot_all(L, d, in + (size_t)p * ic, n16, out + (size_t)p * oc);
+			dot_all(L, d, in + (size_t)p * ic, n16, out + (size_t)p * oc, e, (size_t)p * oc);
 		return;
 	}
 	const int32_t out_off = d.output_zero_point, lo = d.output_activation_min, hi = d.output_activation_max;
@@ -216,19 +257,22 @@ void pointwise_range(const Layer *L, const micro::OpDataConv &d, const int8_t *i
 		int8_t *y = out + (size_t)p0 * oc;
 		for (int p = p0; p < p1; p++, x += ic, y += oc) {
 			const int8_t *w = L->w + (size_t)o0 * ic;
-			for (int o = o0; o < o1; o++, w += ic)
-				y[o] = (int8_t)requant(dot_s8(x, w, n16) + L->bias[o], mult[o], shift[o], out_off, lo, hi);
+			for (int o = o0; o < o1; o++, w += ic) {
+				int32_t c = requant(dot_s8(x, w, n16) + L->bias[o], mult[o], shift[o], out_off, lo, hi);
+				y[o] = e ? epi_apply(e, c, (size_t)p * oc + o, o) : (int8_t)c;
+			}
 		}
 	}
 }
 
-void conv_pointwise(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int pixels)
+void conv_pointwise(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int pixels,
+		    const Epi *e)
 {
-	pie_parallel_for(pixels, [&](int p0, int p1) { pointwise_range(L, d, in, out, p0, p1); });
+	pie_parallel_for(pixels, [&](int p0, int p1) { pointwise_range(L, d, in, out, p0, p1, e); });
 }
 
 bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataConv &d,
-		 const TfLiteEvalTensor *in, TfLiteEvalTensor *out)
+		 const TfLiteEvalTensor *in, TfLiteEvalTensor *out, int8_t *dst_base, const Epi *e)
 {
 	const int ih = in->dims->data[1], iw = in->dims->data[2], ic = L->ic;
 	const int oh = out->dims->data[1], ow = out->dims->data[2];
@@ -243,7 +287,7 @@ bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataC
 	const int8_t *src = in->data.int8;
 	pie_parallel_for(oh, [&](int oy0, int oy1) {
 	int8_t *col = cols + (xPortGetCoreID() ? L->k16 : 0);
-	int8_t *dst = out->data.int8 + (size_t)oy0 * ow * L->oc;
+	int8_t *dst = dst_base + (size_t)oy0 * ow * L->oc;
 	for (int oy = oy0; oy < oy1; oy++) {
 		for (int ox = 0; ox < ow; ox++, dst += L->oc) {
 			const int y0 = oy * sh - ph, x0 = ox * sw - pw;
@@ -256,7 +300,7 @@ bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataC
 				memcpy(c + (xa - x0) * ic, src + ((size_t)y * iw + xa) * ic, (xb - xa) * ic);
 				if (x0 + L->kw > xb) memset(c + (xb - x0) * ic, zp, (x0 + L->kw - xb) * ic);
 			}
-			dot_all(L, d, col, L->k16 / 16, dst);
+			dot_all(L, d, col, L->k16 / 16, dst, e, (size_t)(dst - dst_base));
 		}
 	}
 	});
@@ -412,11 +456,42 @@ TfLiteStatus ConvEval(TfLiteContext *ctx, TfLiteNode *node)
 		if (!prepare_conv(L, kind, filter, bias, data)) { heap_caps_free(L->w); L->w = nullptr; }
 	}
 	if (kind != REF && !L->w) kind = REF;
+
+	/* fusion with the ADD/PRELU that consume our output (pie_fusion.h) */
+	Epi epi;
+	const Epi *ep = nullptr;
+	int8_t *dst = out->data.int8;
+	PieFused *F = kind != REF ? pie_fusion_get(node->outputs->data[0], true) : nullptr;
+	if (F) F->pending = false;
+	if (F && pie_fusion_enabled() && (F->add || F->prelu) && (!F->prelu || F->C == L->oc)) {
+		TfLiteEvalTensor *fin = ctx->GetEvalTensor(ctx, F->prelu ? F->prelu_out : F->add_out);
+		const TfLiteEvalTensor *sk = F->add ? ctx->GetEvalTensor(ctx, F->skip) : nullptr;
+		const size_t n = flat_size(out);
+		bool safe = fin && flat_size(fin) == n &&
+			    !overlaps(fin->data.int8, n, in->data.int8, flat_size(in));
+		if (safe && F->add)
+			safe = sk && flat_size(sk) == n &&
+			       (sk->data.int8 == fin->data.int8 || !overlaps(fin->data.int8, n, sk->data.int8, n));
+		if (safe) {
+			epi.skip = sk ? sk->data.int8 : nullptr;
+			epi.rs = F->r_skip + 128;
+			epi.rc = F->r_conv + 128;
+			epi.om = F->om; epi.os = F->os; epi.oo = F->oo; epi.lo = F->lo; epi.hi = F->hi;
+			epi.add = F->add;
+			epi.pt = F->prelu ? F->prelu_t : nullptr;
+			epi.C = F->C;
+			ep = &epi;
+			dst = fin->data.int8;
+		}
+	}
+
 	bool ok = true;
 	if (kind == POINTWISE)
-		conv_pointwise(L, data, in->data.int8, out->data.int8, out->dims->data[1] * out->dims->data[2]);
+		conv_pointwise(L, data, in->data.int8, dst, out->dims->data[1] * out->dims->data[2], ep);
 	else if (kind == IM2COL)
-		ok = conv_im2col(L, params, data, in, out);
+		ok = conv_im2col(L, params, data, in, out, dst, ep);
+	if (ok && ep) F->pending = true;
+	L->fused = ok && ep;
 	if (kind == REF || !ok) {
 		TfLiteStatus s = ref_conv.invoke(ctx, node);
 		if (L) { L->kind = REF; L->us = esp_timer_get_time() - t0; L->mismatches = 0; }
@@ -566,7 +641,8 @@ extern "C" void pie_print_stats(void)
 		char sh[24] = "-";
 		if (L.w && L.dw_op) snprintf(sh, sizeof(sh), "%dx%d %d", L.kh, L.kw, L.oc);
 		else if (L.w) snprintf(sh, sizeof(sh), "%dx%d %d->%d", L.kh, L.kw, L.ic, L.oc);
-		printf("%-3d %-5s %-7s %10s %10.2f", i, L.dw_op ? "dw" : "conv", kind_name[L.kind], sh, L.us / 1e3);
+		printf("%-3d %-5s %-7s %10s %10.2f%s", i, L.dw_op ? "dw" : "conv", kind_name[L.kind], sh, L.us / 1e3,
+		       L.fused ? " +fused" : "");
 		if (verify && L.kind != REF) printf(" %d", L.mismatches);
 		printf("\n");
 	}
@@ -575,4 +651,5 @@ extern "C" void pie_print_stats(void)
 	if (verify) printf("%s\n", bad ? "VERIFY MISMATCH" : "verify: all PIE layers bit-exact");
 	pie_elementwise_print_stats();
 	pie_parallel_print_stats();
+	pie_fusion_print();
 }

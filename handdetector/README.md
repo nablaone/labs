@@ -73,7 +73,7 @@ silenced while you're in it), and type `exit` to leave.
 | `det prof` | per-op time of the last inference |
 | `det golden` | run the host test vectors on the device, compare bit for bit |
 | `det dump` | last inference snapshot (model input + raw outputs) as hex |
-| `det pie [stats\|verify on\|off\|bench\|cores 1\|2]` | own SIMD/LUT kernels: per-layer times, bit-exact check, cycle microbenchmark, core count |
+| `det pie [stats\|verify on\|off\|bench\|cores 1\|2\|fuse on\|off]` | own SIMD/LUT kernels: per-layer times, bit-exact check, cycle microbenchmark, core count, op fusion |
 | `ble` | BLE link state: MTU, interval, PHY, frames sent, retries |
 
 ## Web diagnostics (BLE)
@@ -141,13 +141,13 @@ make -C model flash-model  # model into its partition; no firmware rebuild neede
 
 Status: it runs and is **bit-exact** with host LiteRT's reference kernels
 (`det golden`). With hand-written PIE SIMD conv kernels and lookup-table elementwise ops
-an inference at 96×96 takes **0.81 s** on both cores (34 s on reference kernels only;
+an inference at 96×96 takes **0.78 s** on both cores (34 s on reference kernels only;
 137 s at the original 192×192).
 A result describes the frame grabbed when that inference started, so hold
 a hand still for ~2 s to be sure of catching a whole cycle. Stages,
 surgery, findings and profiles are in
 [docs/model-pipeline.md](docs/model-pipeline.md); how it got from 137 s to
-0.81 s is in [docs/performance.md](docs/performance.md).
+0.78 s is in [docs/performance.md](docs/performance.md).
 The `det` console command shows status and timing, and `det prof` gives
 per-op time.
 

@@ -43,6 +43,7 @@
 
 #include "pie_kernels.h"
 #include "pie_parallel.h"
+#include "pie_fusion.h"
 
 namespace {
 
@@ -65,7 +66,7 @@ constexpr int kMaxLayers = 256;
 Layer layers[kMaxLayers];
 int n_layers;
 
-struct Stats { int layers, pie, mismatches; int64_t us; } stats[N_OPS];
+struct Stats { int layers, pie, fused, mismatches; int64_t us; } stats[N_OPS];
 
 Layer *find_layer(const TfLiteNode *node)
 {
@@ -154,6 +155,21 @@ bool eval_addsub(bool sub, TfLiteContext *ctx, TfLiteNode *node)
 	const int32_t *r1 = t1 + 128, *r2 = t2 + 128;
 	const int32_t om = d.output_multiplier, os = d.output_shift, oo = d.output_offset;
 	const int32_t lo = d.output_activation_min, hi = d.output_activation_max;
+
+	/* fusion: if one input is a conv output read only by this ADD, give
+	 * that conv what it needs to do this ADD itself (see pie_fusion.h) */
+	for (int k = 0; !sub && k < 2; k++) {
+		const int in_t = node->inputs->data[k];
+		PieFused *F = pie_fusion_get(in_t, false);
+		if (!F || F->add || pie_fusion_consumers(in_t) != 1) continue;
+		memcpy(F->r_conv, k == 0 ? t1 : t2, sizeof(t1));
+		memcpy(F->r_skip, k == 0 ? t2 : t1, sizeof(t1));
+		F->skip = node->inputs->data[1 - k];
+		F->om = om; F->os = os; F->oo = oo; F->lo = lo; F->hi = hi;
+		F->add_out = node->outputs->data[0];
+		F->add = true;
+		break;
+	}
 	const int8_t *x = a->data.int8, *z = b->data.int8;
 	int8_t *y = out->data.int8;
 	const size_t n = flat(out);
@@ -289,6 +305,22 @@ bool eval_prelu(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 		memcpy(L->b_copy, alpha->data.int8, C);
 		L->channels = C;
 	}
+	/* fusion: input read only by this PRELU and produced by a conv (or by
+	 * an ADD already fused into one) -> the conv can apply the table */
+	{
+		const int in_t = node->inputs->data[0];
+		PieFused *F = pie_fusion_by_add_out(in_t);
+		if (!F) {
+			F = pie_fusion_get(in_t, false);
+			if (F && F->add) F = nullptr;
+		}
+		if (F && !F->prelu && pie_fusion_consumers(in_t) == 1) {
+			F->prelu_out = node->outputs->data[0];
+			F->prelu_t = L->mul_lut;
+			F->C = C;
+			F->prelu = true;
+		}
+	}
 	const int8_t *x = in->data.int8;
 	int8_t *y = out->data.int8;
 	const int8_t *t = L->mul_lut + 128 * C;  /* row for x = 0 */
@@ -306,8 +338,25 @@ bool eval_prelu(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 template <Op op>
 TfLiteStatus Eval(TfLiteContext *ctx, TfLiteNode *node)
 {
-	Layer *L = find_layer(node);
 	Stats &st = stats[op];
+	/* fused into the conv that produced our input: already done */
+	if (op == ADD || op == PRELU) {
+		PieFused *F = nullptr;
+		if (op == ADD) {
+			F = pie_fusion_by_add_out(node->outputs->data[0]);
+		} else {
+			F = pie_fusion_by_add_out(node->inputs->data[0]);
+			if (!F) F = pie_fusion_get(node->inputs->data[0], false);
+			if (F && !F->prelu) F = nullptr;
+		}
+		if (F && F->pending) {
+			if (op == PRELU || !F->prelu) F->pending = false;
+			st.layers++;
+			st.fused++;
+			return kTfLiteOk;
+		}
+	}
+	Layer *L = find_layer(node);
 	int64_t t0 = esp_timer_get_time();
 	bool ok = false;
 	if (pie_enabled() && L) {
@@ -369,7 +418,7 @@ void pie_elementwise_print_stats(void)
 	for (int op = 0; op < N_OPS; op++) {
 		const Stats &s = stats[op];
 		if (!s.layers) continue;
-		printf("%-9s %2d layers %10.1f ms  (%d on LUT path)", op_name[op], s.layers, s.us / 1e3, s.pie);
+		printf("%-9s %2d layers %10.1f ms  (%d on LUT path, %d fused into conv)", op_name[op], s.layers, s.us / 1e3, s.pie, s.fused);
 		if (pie_verify_enabled()) printf("  %d mismatches", s.mismatches);
 		printf("\n");
 		bad += s.mismatches;
