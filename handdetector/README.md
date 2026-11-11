@@ -139,8 +139,8 @@ make -C model flash-model  # model into its partition; no firmware rebuild neede
 ```
 
 Status: it runs and is **bit-exact** with host LiteRT's reference kernels
-(`det golden`). It's slow: **11.7 s per inference at 96×96** with the PIE pointwise
-kernels (34 s on reference kernels only), 137 s at the original 192×192.
+(`det golden`). With the hand-written PIE SIMD conv kernels an inference at 96×96 takes
+**3.9 s** (34 s on reference kernels only; 137 s at the original 192×192).
 A result describes the frame grabbed when that inference started, so hold
 a hand still for ~25 s to be sure of catching a whole cycle. Stages, surgery,
 findings and profiles are in [docs/model-pipeline.md](docs/model-pipeline.md).

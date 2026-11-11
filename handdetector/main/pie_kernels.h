@@ -14,6 +14,7 @@
 #include "tensorflow/lite/micro/micro_common.h"
 
 TFLMRegistration PieRegister_CONV_2D();
+TFLMRegistration PieRegister_DEPTHWISE_CONV_2D();
 
 extern "C" {
 /* Runtime switch (`det pie on|off`): off = every layer uses the

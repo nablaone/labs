@@ -207,8 +207,8 @@ void detector_init(void)
 	ops.AddAbs();
 	ops.AddAdd();
 	ops.AddConcatenation();
-	ops.AddConv2D(PieRegister_CONV_2D());  /* PIE SIMD pointwise path, see pie_conv.cc */
-	ops.AddDepthwiseConv2D();
+	ops.AddConv2D(PieRegister_CONV_2D());  /* PIE SIMD paths, see pie_conv.cc */
+	ops.AddDepthwiseConv2D(PieRegister_DEPTHWISE_CONV_2D());
 	ops.AddMaxPool2D();
 	ops.AddMul();
 	ops.AddPad();

@@ -147,12 +147,12 @@ instructions by itself: the disassembled TFLM reference kernels had
 **0** `ee.*` instructions. So the kernels are hand-written with inline
 asm (`main/pie_conv.cc`).
 
-How they plug into TFLM: `PieRegister_CONV_2D()` wraps the reference
-registration.
+How they plug into TFLM: `PieRegister_CONV_2D()` and
+`PieRegister_DEPTHWISE_CONV_2D()` wrap the reference registrations.
 - **Prepare** is TFLM's own, so the quantization parameters are
   identical.
-- **Invoke** dispatches eligible layers (int8, 1×1, stride 1, IC % 16
-  == 0) to PIE and everything else to the reference kernel.
+- **Invoke** dispatches eligible layers to a PIE path and everything
+  else to the reference kernel.
 
 **Pointwise 1×1** (29 layers, 74% of MACs): an output is a dot product of
 a pixel's IC channels with a filter row.
@@ -164,14 +164,33 @@ a pixel's IC channels with a filter row.
   ignore the low 4 address bits and the flatbuffer in flash has no
   alignment guarantee.
 
-| 96×96 inference | reference kernels | + PIE pointwise |
-|---|---|---|
-| total | 33.8 s | **11.7 s** (2.9×) |
-| pointwise 1×1 (29 layers) | ~22.8 s | **0.66 s** (~35×) |
-| depthwise 5×5 (reference) | 5.6 s | 5.6 s |
-| first conv 5×5 s2 (reference) | 2.7 s | 2.7 s |
-| ADD/SUB/ABS/MUL/RELU | 2.3 s | 2.3 s |
-| correctness | bit-exact | **bit-exact** (`det golden`, `det pie verify on`: 0 mismatches in all 29 layers) |
+**Depthwise 5×5** (23 layers): 16 channels per step.
+- `ee.vmulas.s8.qacc` multiplies lane by lane into sixteen 20-bit QACC
+  accumulators, once per tap (25 taps; `ee.vld.128.xp` steps by C).
+- The layer's input is first copied into a buffer padded with the input
+  zero point (internal RAM), so every tap is in bounds and aligned, and a
+  padded tap contributes w·(zp − zp) = 0, exactly like the reference
+  skipping it.
+- `ee.st.qacc_[l/h].[l.128/h.32]` dumps the 2×160-bit accumulator, and the
+  20-bit lanes are unpacked in C (TRM 1.8.151 gives the lane layout).
+- 20 bits hold 25 taps of |w·x| ≤ 2^14 (the limit is 32 taps).
+
+**Every other CONV_2D** (here only the first 5×5 stride-2, 3→32): im2col.
+Each output pixel's 75 input bytes (zero point for padding) are gathered
+into a 16-aligned row of 80, then the ACCX dot product as for pointwise.
+
+| 96×96 inference | reference kernels | + PIE pointwise | + PIE depthwise, im2col |
+|---|---|---|---|
+| total | 33.8 s | 11.7 s | **3.9 s** (8.7×) |
+| pointwise 1×1 (29 layers) | ~22.8 s | 0.66 s | 0.70 s |
+| depthwise 5×5 (23 layers) | 5.6 s | 5.6 s | **0.40 s** (14×) |
+| first conv 5×5 s2 | 2.7 s | 2.7 s | **0.053 s** (51×) |
+| ADD/SUB/ABS/MUL/RELU (reference) | 2.3 s | 2.3 s | 2.36 s |
+| TRANSPOSE, pooling, resize (reference) | 0.4 s | 0.4 s | 0.38 s |
+| correctness | bit-exact | bit-exact | **bit-exact** (`det golden`; `det pie verify on`: 0 mismatches in all 53 conv layers) |
+
+Now the convolutions are 30% of the time; the PRelu decomposition
+(ADD/SUB/ABS/MUL/RELU) and the TRANSPOSEs around it are 68%.
 
 `det pie off` switches back to the reference kernels for A/B timing.
 `det pie stats` gives per-layer path and time.
@@ -188,14 +207,10 @@ vs host LiteRT (reference kernels): boxes 0/2016 differ, scores 0/504 differ, ma
 
 ## Next steps (ideas, not done)
 
-- **PIE depthwise 5×5** (now 48% of the time): 16 channels per vector,
-  `ee.vmulas.s8.qacc` over the 25 taps, padding by a zero-point border.
-  QACC lanes are 20 bits and have to be unpacked to int32 for exact
-  requantization.
-- **PIE first conv** (5×5 stride 2, 3→32): repack 5×5×3 = 75 inputs per
-  output into a 16-aligned vector (im2col), then use the ACCX dot product.
-- **Elementwise ADD/SUB/MUL/ABS/RELU:** native PRELU (one op instead of
-  five), or fused PIE versions.
+- **Elementwise ADD/SUB/MUL/ABS/RELU** (now 61%): exact lookup tables
+  (an int8 input has only 256 values, so each input's rescale is a table;
+  only the final requantization stays per element), or a native PRELU
+  (one op instead of five, and no TRANSPOSEs around it).
 - **Pointwise tuning:** fused load+MAC (`ee.vmulas.s8.accx.ld.ip`), keep
   the pixel vector in `q` registers across output channels, zero-overhead
   `loop`.

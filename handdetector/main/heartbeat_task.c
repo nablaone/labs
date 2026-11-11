@@ -7,14 +7,18 @@
 #include "node_config.h"
 #include "heartbeat_task.h"
 
-#define HB_PERIOD_MS      500  /* alive */
-#define HB_FAST_PERIOD_MS 100  /* hand detected */
+#define HB_PERIOD_MS     1000  /* alive: 1 s on, 1 s off */
+#define HB_FAST_PERIOD_MS  40  /* hand detected: ~12 blinks/s */
 
 static volatile bool fast;
+static TaskHandle_t hb_task;
 
 void heartbeat_set_fast(bool on)
 {
+	bool changed = fast != on;
 	fast = on;
+	/* switch now, not after the current (up to 1 s) wait */
+	if (changed && hb_task) xTaskNotifyGive(hb_task);
 }
 
 static void led_set(bool on)
@@ -35,8 +39,9 @@ void heartbeat_task(void *arg)
 {
 	bool led_on = false;
 
+	hb_task = xTaskGetCurrentTaskHandle();
 	while (1) {
-		vTaskDelay(pdMS_TO_TICKS(fast ? HB_FAST_PERIOD_MS : HB_PERIOD_MS));
+		ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(fast ? HB_FAST_PERIOD_MS : HB_PERIOD_MS));
 		led_on = !led_on;
 		led_set(led_on);
 	}
