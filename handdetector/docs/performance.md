@@ -1,7 +1,7 @@
 # Making the palm detector fast on the ESP32-S3
 
 How one inference of the OpenCV-zoo palm detector went from **137 s** to
-**1.63 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
+**0.81 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
 uses upstream TensorFlow Lite Micro and no vendor ML libraries. The model
 pipeline itself is in [model-pipeline.md](model-pipeline.md).
 
@@ -61,10 +61,12 @@ Per-op profile at 96×96 (`det prof`):
 | + PIE pointwise 1×1 conv | 11.7 s | 2.9× |
 | + PIE depthwise 5×5, im2col for the first conv | 3.9 s | 3.0× |
 | + lookup-table elementwise ops | 2.6 s | 1.5× |
-| + native PRELU (different converter output) | **1.63 s** | 1.6× |
+| + native PRELU (different converter output) | 1.63 s | 1.6× |
+| + fast exact requantization, cache-blocked pointwise | 1.04 s | 1.6× |
+| + both CPU cores | **0.81 s** | 1.28× |
 
-Overall: **21× faster than reference kernels at the same input size,
-84× faster than the starting point.**
+Overall: **42× faster than reference kernels at the same input size,
+169× faster than the starting point.**
 
 ### 1. Smaller input: 192 → 96
 
@@ -177,45 +179,120 @@ It has its own golden vectors, and the device matches them bit for bit.
 Accuracy is about the same: host palms 0.84–0.96 (before 0.90–0.94),
 worst no-hand 0.015 (before 0.05), a live camera hand 0.90 (before 0.87).
 
+### 6. Requantization and cache blocking (1.63 → 1.04 s)
+
+A cycle-count microbenchmark (`det pie bench`) showed where the time per
+output value went:
+
+| building block | cycles |
+|---|---|
+| TFLM `MultiplyByQuantizedMultiplier` (per output) | 80 |
+| 32-channel dot product, weights cached | 32 |
+| 256-channel dot product, weights cached | 145 |
+| 256-channel dot product, weights from PSRAM | 1 075 |
+| PSRAM streaming read | 69 per 16 B (55 MB/s) |
+
+Two fixes:
+
+**Requantization: 80 → ~20 cycles, exact.** TFLM's version is a
+non-inlined call with a 64-bit division. Two identities make it cheap
+(`pie_mbqm()` in `main/pie_kernels.h`):
+- The rounding doubling high-multiply, `trunc((a·M + nudge) / 2³¹)` with
+  a sign-dependent nudge, equals `floor((a·M + 2³⁰) / 2³¹)` for every
+  product: one 32×32→64 multiply, an add and a shift.
+- The final round-half-away-from-zero shift is
+  `(x + 2^(e−1) − (x<0)) >> e`.
+
+`det pie bench` compares it with TFLM's function on 400 000 random inputs
+(0 mismatches), and verify mode checks every layer. It replaces the
+per-output requantization in pointwise, im2col, depthwise, ADD and MUL.
+
+**Cache blocking in pointwise convs.** The data cache is 32 KB. Going pixel
+by pixel over all output channels re-reads every weight row for every
+pixel, so a 256→256 layer (64 KB of weights) streamed its weights from
+PSRAM per pixel, ~1 100 cycles per output. Output channels are now
+processed in blocks whose weights fit in 16 KB, and all pixels pass
+through one block before the next. Small layers are a single block.
+
+| layer | before | after |
+|---|---|---|
+| 256→256 @6×6 (×7) | 47.5 ms | 9.5 ms |
+| 256→256 @3×3 (×4) | 12.0 ms | 3.2 ms |
+| 256→128 @12×12 | 42.7 ms | 18.8 ms |
+| 128→256 @6×6 | 16.7 ms | 6.0 ms |
+| 32→32 @48×48 (×3, requantization only) | 40.8 ms | 27.1 ms |
+| pointwise total (29 layers) | 690 ms | 302 ms |
+| depthwise total (23 layers) | 438 ms | 367 ms |
+| ADD (25) | 261 ms | 144 ms |
+
+### 7. Both cores (1.04 → 0.81 s)
+
+Core 1 ran the inference while core 0 mostly idled (BLE, console). Now
+every own kernel splits its work: `main/pie_parallel.cc` keeps one worker
+task per core, and `pie_parallel_for(n, f)` runs half of `[0, n)` on the
+caller's core and half on the other.
+- Conv, first conv and depthwise split by output rows; ADD, PRELU and MUL
+  by elements.
+- Shared setup (tables, folded biases, the padded depthwise input) is done
+  once before the split, and each half writes only its own outputs.
+- PIE accumulators are per core, so the halves don't interfere. The first
+  conv gets one gathered-row buffer per core.
+- Workers run at priority 3: above the detector, below BLE, the console
+  and the NimBLE host.
+- `det pie cores 1|2` switches for A/B timing; `det pie` shows how the
+  halves balanced.
+
+| | 1 core | 2 cores | speed-up |
+|---|---|---|---|
+| depthwise (23) | 367 ms | 265 ms | 1.39× |
+| pointwise + im2col (30) | 341 ms | 240 ms | 1.42× |
+| ADD (25) | 144 ms | 124 ms | 1.16× |
+| PRELU (26) | 57 ms | 51 ms | 1.12× |
+| **inference** | 1.04 s | **0.81 s** | 1.28× |
+
+**Why not 2×: memory.** The halves are balanced (each ~630 ms per
+inference, the caller waits 3 ms in total). But the single-core time of
+these ops is ~910 ms, so each core runs ~40% slower while the other one
+is busy. Both share the cache and the PSRAM bus, and the activations live
+in PSRAM. The memory-bound ops (ADD, PRELU: a table lookup per byte)
+barely gain; the compute-heavy convolutions gain the most.
+
 ## Current status
 
-96×96, 1.63 s per inference (`det prof`):
+96×96, 0.81 s per inference (`det prof`):
 
 | op | ms | % | kernel |
 |---|---|---|---|
-| CONV_2D (30) | 744 | 45.6 | PIE pointwise + im2col |
-| DEPTHWISE_CONV_2D (23) | 438 | 26.9 | PIE |
-| ADD (25) | 261 | 16.0 | LUT + per-element requant |
-| PRELU (26) | 57 | 3.5 | LUT |
-| MAX_POOL_2D (4) | 54 | 3.3 | reference |
-| PAD (8) | 40 | 2.5 | reference |
-| RESIZE_BILINEAR (2) | 38 | 2.3 | reference |
+| DEPTHWISE_CONV_2D (23) | 265 | 32.5 | PIE, 2 cores |
+| CONV_2D (30) | 240 | 29.4 | PIE pointwise + im2col, 2 cores |
+| ADD (25) | 124 | 15.2 | LUT + requant, 2 cores |
+| MAX_POOL_2D (4) | 55 | 6.7 | reference, 1 core |
+| PRELU (26) | 52 | 6.3 | LUT, 2 cores |
+| PAD (8) | 42 | 5.1 | reference, 1 core |
+| RESIZE_BILINEAR (2) | 39 | 4.7 | reference, 1 core |
 | CONCAT, RESHAPE | 0.2 | 0.0 | reference |
-| **total** | **1 632** | | |
+| **total** | **815** | | |
 
 Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
 preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
-about every 1.7 s.
-
-Convolutions now run at about 57 M MAC/s (70 M MACs in ~1.2 s). That's
-28× the reference, but far from PIE's theoretical 16 MAC/cycle (3.8
-GMAC/s). The time goes to memory (activations in PSRAM, weights copied to
-PSRAM) and to the scalar 64-bit requantization of every output.
+about every 0.9 s.
 
 ## What's left
 
-The convolutions are now 72% of the time. Ordered by expected payoff:
+Ordered by expected payoff:
 
-1. **Cheaper exact requantization.** It runs once per output in every
-   conv and once per element in ADD. A hand-written 32-bit high-multiply
-   instead of the generic int64 code, still exact.
-2. **Internal SRAM for hot tensors.** The arena at 96×96 is 291 KB. Small
-   late layers and scratch buffers could live in internal RAM instead of
-   PSRAM.
-3. **Pointwise tuning.** Fused load+multiply (`ee.vmulas.s8.accx.ld.ip`),
-   keep a pixel's vector in registers across output channels, use the
+1. **PSRAM traffic** is now the wall for both cores. Ideas: fuse PRELU
+   and ADD into the conv that produces their input (a whole pass over
+   memory each saved), keep small late-layer tensors in internal RAM, try
+   the 64 KB data cache setting.
+2. **Reference ops** (MAX_POOL, PAD, RESIZE): 136 ms on one core, 17% now.
+   All three are simple to write directly and to split across cores.
+3. **Depthwise** still ~167 cycles per output on one core: a padded copy
+   of every input, QACC write-out and 20-bit unpacking in C, 25 load
+   pairs per 16 channels.
+4. **Pointwise inner loop:** fused load+multiply
+   (`ee.vmulas.s8.accx.ld.ip`), several outputs per input load, the
    zero-overhead `loop`.
-4. **MAX_POOL / PAD / RESIZE** on reference kernels: 0.13 s together.
 
 ## Pitfalls hit along the way
 

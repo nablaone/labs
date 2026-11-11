@@ -42,6 +42,7 @@
 #include "tensorflow/lite/micro/kernels/internal/common.h"
 
 #include "pie_kernels.h"
+#include "pie_parallel.h"
 
 namespace {
 
@@ -124,7 +125,9 @@ bool eval_unary(Op op, Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 	const int8_t *x = in->data.int8;
 	int8_t *y = out->data.int8;
 	const int8_t *t = L->lut + 128;
-	for (size_t i = 0, n = flat(out); i < n; i++) y[i] = t[x[i]];
+	pie_parallel_for((int)flat(out), [&](int b, int e) {
+		for (int i = b; i < e; i++) y[i] = t[x[i]];
+	});
 	return true;
 }
 
@@ -154,13 +157,15 @@ bool eval_addsub(bool sub, TfLiteContext *ctx, TfLiteNode *node)
 	const int8_t *x = a->data.int8, *z = b->data.int8;
 	int8_t *y = out->data.int8;
 	const size_t n = flat(out);
-	if (sub) {
-		for (size_t i = 0; i < n; i++)
-			y[i] = (int8_t)clamp(MultiplyByQuantizedMultiplierSmallerThanOneExp(r1[x[i]] - r2[z[i]], om, os) + oo, lo, hi);
-	} else {
-		for (size_t i = 0; i < n; i++)
-			y[i] = (int8_t)clamp(MultiplyByQuantizedMultiplierSmallerThanOneExp(r1[x[i]] + r2[z[i]], om, os) + oo, lo, hi);
-	}
+	pie_parallel_for((int)n, [&](int b, int e) {
+		if (sub) {
+			for (int i = b; i < e; i++)
+				y[i] = (int8_t)clamp(pie_mbqm(r1[x[i]] - r2[z[i]], om, os) + oo, lo, hi);
+		} else {
+			for (int i = b; i < e; i++)
+				y[i] = (int8_t)clamp(pie_mbqm(r1[x[i]] + r2[z[i]], om, os) + oo, lo, hi);
+		}
+	});
 	return true;
 }
 
@@ -198,13 +203,18 @@ bool eval_mul(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 	const int8_t *x = a->data.int8, *bc = b->data.int8;
 	int8_t *y = out->data.int8;
 
+	/* rows: outer * C runs of `inner` elements, each of one channel */
+	const int rows = (int)(outer * C);
 	if (inner < 64) {
-		for (size_t o = 0; o < outer; o++)
-			for (int c = 0; c < C; c++) {
-				const int32_t bv = off2 + bc[c];
-				for (size_t i = 0; i < inner; i++, x++, y++)
-					*y = (int8_t)clamp(oo + MultiplyByQuantizedMultiplier((off1 + *x) * bv, om, os), lo, hi);
+		pie_parallel_for(rows, [&](int r0, int r1) {
+			for (int r = r0; r < r1; r++) {
+				const int32_t bv = off2 + bc[r % C];
+				const int8_t *xs = x + (size_t)r * inner;
+				int8_t *ys = y + (size_t)r * inner;
+				for (size_t i = 0; i < inner; i++)
+					ys[i] = (int8_t)clamp(oo + pie_mbqm((off1 + xs[i]) * bv, om, os), lo, hi);
 			}
+		});
 		return true;
 	}
 
@@ -226,14 +236,16 @@ bool eval_mul(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 				L->mul_lut[c * 256 + v + 128] = (int8_t)clamp(
 					oo + MultiplyByQuantizedMultiplier((off1 + v) * (off2 + bc[c]), om, os), lo, hi);
 	}
-	static int8_t row[256];  /* current channel's table, in internal RAM */
-	for (size_t o = 0; o < outer; o++)
-		for (int c = 0; c < C; c++) {
-			memcpy(row, L->mul_lut + c * 256, 256);
+	pie_parallel_for(rows, [&](int r0, int r1) {
+		int8_t row[256];  /* current channel's table, on this core's stack */
+		for (int r = r0; r < r1; r++) {
+			memcpy(row, L->mul_lut + (r % C) * 256, 256);
 			const int8_t *t = row + 128;
-			for (size_t i = 0; i < inner; i++) y[i] = t[x[i]];
-			x += inner; y += inner;
+			const int8_t *xs = x + (size_t)r * inner;
+			int8_t *ys = y + (size_t)r * inner;
+			for (size_t i = 0; i < inner; i++) ys[i] = t[xs[i]];
 		}
+	});
 	return true;
 }
 
@@ -280,9 +292,12 @@ bool eval_prelu(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 	const int8_t *x = in->data.int8;
 	int8_t *y = out->data.int8;
 	const int8_t *t = L->mul_lut + 128 * C;  /* row for x = 0 */
-	const size_t pixels = flat(out) / C;
-	for (size_t p = 0; p < pixels; p++, x += C, y += C)
-		for (int c = 0; c < C; c++) y[c] = t[x[c] * C + c];
+	pie_parallel_for((int)(flat(out) / C), [&](int p0, int p1) {
+		const int8_t *xs = x + (size_t)p0 * C;
+		int8_t *ys = y + (size_t)p0 * C;
+		for (int p = p0; p < p1; p++, xs += C, ys += C)
+			for (int c = 0; c < C; c++) ys[c] = t[xs[c] * C + c];
+	});
 	return true;
 }
 

@@ -20,6 +20,7 @@
 
 #include "camera.h"
 #include "pie_kernels.h"
+#include "pie_parallel.h"
 #include "heartbeat_task.h"
 #include "detector.h"
 
@@ -194,6 +195,7 @@ static bool make_anchors(void)
 void detector_init(void)
 {
 	infer_lock = xSemaphoreCreateMutex();
+	pie_parallel_init();  /* kernel worker tasks, one per core */
 	if (!map_model()) {
 		ESP_LOGW(TAG, "disabled: %s", st.error);
 		return;
@@ -433,6 +435,7 @@ static void run_once(void)
 	memcpy(pending_in, t_in->data.int8, (size_t)res * res * 3);
 	profiler.Reset();
 	pie_elementwise_reset_stats();
+	pie_parallel_reset_stats();
 	int64_t t2 = esp_timer_get_time();
 	TfLiteStatus rc = interpreter->Invoke();
 	int64_t t3 = esp_timer_get_time();
@@ -515,6 +518,7 @@ static int run_golden(void)
 	memcpy(pending_in, in, len[0]);
 	profiler.Reset();
 	pie_elementwise_reset_stats();
+	pie_parallel_reset_stats();
 	int64_t t0 = esp_timer_get_time();
 	TfLiteStatus rc = interpreter->Invoke();
 	int64_t dt = esp_timer_get_time() - t0;
@@ -572,8 +576,10 @@ static int cmd_det(int argc, char **argv)
 		const char *a = argc > 2 ? argv[2] : "stats";
 		if (strcmp(a, "on") == 0 || strcmp(a, "off") == 0) pie_set_enabled(a[1] == 'n');
 		else if (strcmp(a, "verify") == 0) pie_set_verify(argc > 3 && strcmp(argv[3], "on") == 0);
+		else if (strcmp(a, "bench") == 0) pie_microbench();
+		else if (strcmp(a, "cores") == 0 && argc > 3) pie_parallel_set_cores(atoi(argv[3]));
 		else pie_print_stats();
-		printf("PIE kernels %s\n", pie_enabled() ? "on" : "off");
+		printf("PIE kernels %s, %d core%s\n", pie_enabled() ? "on" : "off", pie_parallel_cores(), pie_parallel_cores() > 1 ? "s" : "");
 		return 0;
 	}
 	if (strcmp(sub, "golden") == 0) {
@@ -616,7 +622,7 @@ static int cmd_det(int argc, char **argv)
 		return 0;
 	}
 	if (sub[0]) {
-		printf("usage: det [on|off|thr <0..1>|prof|golden|dump|pie [on|off|stats|verify on|off]]\n");
+		printf("usage: det [on|off|thr <0..1>|prof|golden|dump|pie [on|off|stats|verify on|off|bench|cores 1|2]]\n");
 		return 1;
 	}
 	printf("state      %s%s%s\n", enabled ? "running" : interpreter ? "off" : "no model",
@@ -638,7 +644,7 @@ void detector_register_cli_commands(void)
 {
 	const esp_console_cmd_t cmd = {
 		.command = "det",
-		.help = "Palm detector: status | on | off | thr <0..1> | prof (per-op timing of the last inference) | golden (compare with host LiteRT) | dump (last snapshot as hex) | pie on/off/stats/verify on/off",
+		.help = "Palm detector: status | on | off | thr <0..1> | prof (per-op timing of the last inference) | golden (compare with host LiteRT) | dump (last snapshot as hex) | pie on/off/stats/verify on/off/bench/cores 1|2",
 		.hint = NULL,
 		.func = &cmd_det,
 		.argtable = NULL,

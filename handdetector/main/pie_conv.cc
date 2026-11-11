@@ -37,6 +37,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "esp_cpu.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 
@@ -46,6 +48,7 @@
 #include "tensorflow/lite/micro/kernels/internal/common.h"
 
 #include "pie_kernels.h"
+#include "pie_parallel.h"
 
 namespace {
 
@@ -108,7 +111,7 @@ int8_t *get_scratch(size_t n)
 
 inline int32_t requant(int32_t acc, int32_t mult, int32_t shift, int32_t out_off, int32_t lo, int32_t hi)
 {
-	acc = MultiplyByQuantizedMultiplier(acc, mult, shift) + out_off;
+	acc = pie_mbqm(acc, mult, shift) + out_off;
 	return acc < lo ? lo : acc > hi ? hi : acc;
 }
 
@@ -186,11 +189,42 @@ bool prepare_conv(Layer *L, Kind kind, const TfLiteEvalTensor *filter, const TfL
 	return true;
 }
 
+/* Blocking for the 32 KB data cache: going pixel by pixel over all output
+ * channels re-reads every weight row for every pixel, and a 256x256 layer
+ * (64 KB of weights) then streams them from PSRAM per pixel (~1075 vs ~240
+ * cycles per output). So the output channels are split into blocks whose
+ * weights take at most kWeightBlock bytes; each block stays cached while
+ * all pixels pass through it. Small layers are a single block, i.e. plain
+ * pixel order. */
+constexpr size_t kWeightBlock = 16 * 1024;
+
+void pointwise_range(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int p0, int p1)
+{
+	const int ic = L->ic, oc = L->oc, n16 = ic / 16;
+	int block = (int)(kWeightBlock / ic);
+	if (block < 1) block = 1;
+	if (block >= oc) {
+		for (int p = p0; p < p1; p++)
+			dot_all(L, d, in + (size_t)p * ic, n16, out + (size_t)p * oc);
+		return;
+	}
+	const int32_t out_off = d.output_zero_point, lo = d.output_activation_min, hi = d.output_activation_max;
+	const int32_t *mult = d.per_channel_output_multiplier, *shift = d.per_channel_output_shift;
+	for (int o0 = 0; o0 < oc; o0 += block) {
+		const int o1 = o0 + block < oc ? o0 + block : oc;
+		const int8_t *x = in + (size_t)p0 * ic;
+		int8_t *y = out + (size_t)p0 * oc;
+		for (int p = p0; p < p1; p++, x += ic, y += oc) {
+			const int8_t *w = L->w + (size_t)o0 * ic;
+			for (int o = o0; o < o1; o++, w += ic)
+				y[o] = (int8_t)requant(dot_s8(x, w, n16) + L->bias[o], mult[o], shift[o], out_off, lo, hi);
+		}
+	}
+}
+
 void conv_pointwise(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int pixels)
 {
-	const int n16 = L->ic / 16;
-	for (int p = 0; p < pixels; p++, out += L->oc)
-		dot_all(L, d, in + (size_t)p * L->ic, n16, out);
+	pie_parallel_for(pixels, [&](int p0, int p1) { pointwise_range(L, d, in, out, p0, p1); });
 }
 
 bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataConv &d,
@@ -202,12 +236,15 @@ bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataC
 	const int ph = d.padding.height, pw = d.padding.width;
 	const int8_t zp = (int8_t)d.input_zero_point;
 	const int row_bytes = L->kw * ic;
-	int8_t *col = get_scratch(L->k16);
-	if (!col) return false;
-	memset(col, 0, L->k16);  /* tail stays 0 (its weights are 0 too) */
+	/* one gathered row per core; the tail stays 0 (its weights are 0 too) */
+	int8_t *cols = get_scratch(2 * (size_t)L->k16);
+	if (!cols) return false;
+	memset(cols, 0, 2 * (size_t)L->k16);
 	const int8_t *src = in->data.int8;
-	int8_t *dst = out->data.int8;
-	for (int oy = 0; oy < oh; oy++) {
+	pie_parallel_for(oh, [&](int oy0, int oy1) {
+	int8_t *col = cols + (xPortGetCoreID() ? L->k16 : 0);
+	int8_t *dst = out->data.int8 + (size_t)oy0 * ow * L->oc;
+	for (int oy = oy0; oy < oy1; oy++) {
 		for (int ox = 0; ox < ow; ox++, dst += L->oc) {
 			const int y0 = oy * sh - ph, x0 = ox * sw - pw;
 			int8_t *c = col;
@@ -222,6 +259,7 @@ bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataC
 			dot_all(L, d, col, L->k16 / 16, dst);
 		}
 	}
+	});
 	return true;
 }
 
@@ -294,12 +332,13 @@ bool dw_conv(const Layer *L, const TfLiteDepthwiseConvParams &p, const micro::Op
 		if (xb < PW) memset(r + (size_t)xb * C, zp, (size_t)(PW - xb) * C);
 	}
 
-	alignas(16) uint8_t acc[64];
 	const int32_t *mult = d.per_channel_output_multiplier, *shift = d.per_channel_output_shift;
 	const int32_t out_off = d.output_zero_point, lo = d.output_activation_min, hi = d.output_activation_max;
 	const int step = C;  /* next tap along x, both in input and weights */
-	int8_t *dst = out->data.int8;
-	for (int oy = 0; oy < oh; oy++) {
+	pie_parallel_for(oh, [&](int oy0, int oy1) {
+	alignas(16) uint8_t acc[64];
+	int8_t *dst = out->data.int8 + (size_t)oy0 * ow * C;
+	for (int oy = oy0; oy < oy1; oy++) {
 		for (int ox = 0; ox < ow; ox++) {
 			const int8_t *base = pad + (size_t)oy * sh * prow + (size_t)ox * sw * C;
 			for (int g = 0; g < C; g += 16, dst += 16) {
@@ -333,6 +372,7 @@ bool dw_conv(const Layer *L, const TfLiteDepthwiseConvParams &p, const micro::Op
 			}
 		}
 	}
+	});
 	return true;
 }
 
@@ -440,6 +480,79 @@ extern "C" bool pie_enabled(void) { return enabled; }
 extern "C" void pie_set_verify(bool on) { verify = on; }
 extern "C" bool pie_verify_enabled(void) { return verify; }
 
+/* `det pie bench`: cycle counts of the building blocks, to see where
+ * the per-output time goes. */
+extern "C" void pie_microbench(void)
+{
+	const int N = 4096;
+	int32_t *acc = (int32_t *)heap_caps_malloc(N * 4, MALLOC_CAP_INTERNAL);
+	int8_t *wi = (int8_t *)heap_caps_aligned_alloc(16, 65536, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+	int8_t *wp = (int8_t *)heap_caps_aligned_alloc(16, 65536, MALLOC_CAP_SPIRAM);
+	int8_t *flush = (int8_t *)heap_caps_aligned_alloc(16, 131072, MALLOC_CAP_SPIRAM);
+	alignas(16) static int8_t x[256];
+	if (!acc || !wp || !flush) { printf("alloc failed\n"); goto out; }
+	for (int i = 0; i < N; i++) acc[i] = (i * 7919) % 200000 - 100000;
+	for (int i = 0; i < 65536; i++) { wp[i] = (int8_t)(i * 31); if (wi) wi[i] = wp[i]; }
+	for (int i = 0; i < 256; i++) x[i] = (int8_t)(i * 13);
+	{
+		volatile int32_t sink = 0;
+		uint32_t c0 = esp_cpu_get_cycle_count();
+		for (int i = 0; i < N; i++) sink = sink + requant(acc[i], 1518500250, -7, -3, -128, 127);
+		uint32_t c1 = esp_cpu_get_cycle_count();
+		printf("requant, pie_mbqm + offset + clamp: %.1f cycles\n", (float)(c1 - c0) / N);
+		c0 = esp_cpu_get_cycle_count();
+		for (int i = 0; i < N; i++) sink = sink + tflite::micro::MultiplyByQuantizedMultiplier(acc[i], 1518500250, -7);
+		c1 = esp_cpu_get_cycle_count();
+		printf("TFLM MultiplyByQuantizedMultiplier alone: %.1f cycles\n", (float)(c1 - c0) / N);
+
+		/* exactness: random accumulators, multipliers and shifts in the
+		 * ranges TFLM produces (M in [2^30, 2^31), shift -31..7) */
+		uint32_t r = 12345, bad = 0, n = 0;
+		auto rnd = [&r]() { r = r * 1664525u + 1013904223u; return r; };
+		for (int i = 0; i < 400000; i++) {
+			const int shift = (int)(rnd() % 39) - 31;
+			const int32_t m = (int32_t)((1u << 30) | (rnd() >> 2));
+			const int bits = shift > 0 ? 23 - shift : 30;  /* keep x << shift in range */
+			const int32_t x = (int32_t)(rnd() >> (32 - bits)) - (1 << (bits - 1));
+			bad += pie_mbqm(x, m, shift) != tflite::micro::MultiplyByQuantizedMultiplier(x, m, shift);
+			n++;
+		}
+		printf("pie_mbqm vs TFLM on %lu random inputs: %lu mismatches\n", (unsigned long)n, (unsigned long)bad);
+
+		for (int n16 : { 2, 4, 8, 16 }) {
+			c0 = esp_cpu_get_cycle_count();
+			for (int i = 0; i < N; i++) sink = sink + dot_s8(x, wi ? wi + (i & 15) * 256 : wp, n16);
+			c1 = esp_cpu_get_cycle_count();
+			printf("dot_s8 %3d channels, cached weights: %.1f cycles\n", n16 * 16, (float)(c1 - c0) / N);
+		}
+		/* one 256->256 pointwise pixel: 256 dot products over 64 KB of weights */
+		for (int pass = 0; pass < 2; pass++) {
+			int8_t *w = pass ? wi : wp;
+			if (!w) continue;
+			for (int i = 0; i < 131072; i += 32) sink = sink + flush[i];  /* evict */
+			c0 = esp_cpu_get_cycle_count();
+			for (int o = 0; o < 256; o++) sink = sink + dot_s8(x, w + o * 256, 16);
+			c1 = esp_cpu_get_cycle_count();
+			printf("256->256 pixel, weights in %s (cold): %.1f cycles/output\n", pass ? "internal RAM" : "PSRAM", (float)(c1 - c0) / 256);
+		}
+		/* streaming read bandwidth: 16-byte PIE loads over 64 KB */
+		for (int pass = 0; pass < 2; pass++) {
+			const int8_t *p = pass ? wi : wp;
+			if (!p) continue;
+			for (int i = 0; i < 131072; i += 32) sink = sink + flush[i];
+			c0 = esp_cpu_get_cycle_count();
+			for (int i = 0; i < 4096; i++)
+				asm volatile("ee.vld.128.ip q0, %0, 16" : "+a"(p) :: "memory");
+			c1 = esp_cpu_get_cycle_count();
+			printf("read 64 KB from %s (cold): %.2f cycles/16 B = %.0f MB/s\n", pass ? "internal RAM" : "PSRAM",
+			       (float)(c1 - c0) / 4096, 65536.0 * 240 / (c1 - c0));
+		}
+		(void)sink;
+	}
+out:
+	heap_caps_free(acc); heap_caps_free(wi); heap_caps_free(wp); heap_caps_free(flush);
+}
+
 extern "C" void pie_print_stats(void)
 {
 	int64_t us[4] = { 0 };
@@ -461,4 +574,5 @@ extern "C" void pie_print_stats(void)
 		if (count[k]) printf("%-9s %2d layers %10.1f ms\n", kind_name[k], count[k], us[k] / 1e3);
 	if (verify) printf("%s\n", bad ? "VERIFY MISMATCH" : "verify: all PIE layers bit-exact");
 	pie_elementwise_print_stats();
+	pie_parallel_print_stats();
 }
