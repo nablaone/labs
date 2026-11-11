@@ -21,6 +21,7 @@ TFLMRegistration PieRegister_RELU();
 TFLMRegistration PieRegister_ADD();
 TFLMRegistration PieRegister_SUB();
 TFLMRegistration PieRegister_MUL();
+TFLMRegistration PieRegister_PRELU();
 void pie_elementwise_reset_stats(void);
 void pie_elementwise_print_stats(void);
 

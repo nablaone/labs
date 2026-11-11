@@ -203,7 +203,7 @@ void detector_init(void)
 	 * op missing here fails AllocateTensors() with its name logged.
 	 * ABS/MUL/RELU/SUB come from onnx2tf's tf_converter path
 	 * decomposing PRelu: prelu(x) = relu(x) - alpha * relu(-x) style. */
-	static tflite::MicroMutableOpResolver<13> ops;
+	static tflite::MicroMutableOpResolver<14> ops;
 	ops.AddAbs(PieRegister_ABS());  /* lookup tables, see pie_elementwise.cc */
 	ops.AddAdd(PieRegister_ADD());
 	ops.AddConcatenation();
@@ -212,6 +212,7 @@ void detector_init(void)
 	ops.AddMaxPool2D();
 	ops.AddMul(PieRegister_MUL());
 	ops.AddPad();
+	ops.AddPrelu(PieRegister_PRELU());  /* native PRELU (flatbuffer_direct models) */
 	ops.AddRelu(PieRegister_RELU());
 	ops.AddReshape();
 	ops.AddResizeBilinear();

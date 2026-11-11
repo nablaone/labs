@@ -19,16 +19,23 @@ Measured 2026-11-11 on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM).
 |---|---|---|---|
 | conv MACs | 278 M | 124 M | 70 M |
 | anchors | 2016 | 896 | 504 |
-| int8 .tflite | 1175 KB | 1175 KB | 1175 KB |
-| TFLM arena | 1239 KB (PSRAM) | — | 375 KB (PSRAM) |
-| **inference on the S3** | **137 s** | ~60 s (est.) | **33.8 s** |
-| host int8 palm scores (3 test images) | 0.95–0.96 | 0.97–0.98 | 0.90–0.94 |
-| host int8 worst no-hand score | 0.24 | 0.07 | 0.05 |
+| int8 .tflite | 1175 KB | 1175 KB | 1179 KB |
+| TFLM arena | 1239 KB (PSRAM) | — | 291 KB (PSRAM) |
+| inference, TFLM reference kernels | 137 s | ~60 s (est.) | 33.8 s |
+| **inference, own PIE/LUT kernels** | — | — | **1.63 s** |
+| host int8 palm scores (3 test images) | 0.95–0.96 | 0.97–0.98 | 0.84–0.96 |
+| host int8 worst no-hand score | 0.24 | 0.07 | 0.015 |
+
+The 192 and 128 columns and the reference-kernel row are from the first
+(tf_converter) model; the 96 column's accuracy rows are the current
+(flatbuffer_direct, native PRELU) model.
 
 **It runs, and it's correct.** The device output is bit-exact with host
-LiteRT running reference kernels (`det golden`). **It's slow:** about
-2 M MAC/s, roughly 120 cycles per multiply-accumulate. The cause is
-TFLM's reference kernels (see "Where the time goes").
+LiteRT running reference kernels (`det golden`). On TFLM's reference
+kernels it's slow: about 2 M MAC/s, roughly 120 cycles per
+multiply-accumulate (see "Where the time goes"). Hand-written PIE SIMD
+and lookup-table kernels bring it to 1.63 s, still bit-exact
+([performance.md](performance.md) tells that story).
 
 ## Pipeline
 
@@ -84,15 +91,24 @@ test images (max |diff| 0.0).
 
 ## Findings along the way
 
-1. **onnx2tf 2.x's default `flatbuffer_direct` backend writes broken int8.**
-   Per-channel quantization puts `quantized_dimension=3` on rank-1 tensors,
-   and LiteRT refuses to load the model. Fix: `--tflite_backend
-   tf_converter` (TensorFlow's own MLIR quantizer).
-2. **The tf_converter path decomposes PRelu.** It becomes
-   ABS/MUL/RELU/SUB/ADD: 5 ops and extra full-size tensors instead of one
-   PRELU (TFLM supports PRELU). The decomposition costs about 7% of
-   inference time. Getting a native PRELU back (the flatbuffer_direct path
-   does emit it) is a possible optimization.
+1. **onnx2tf 2.x's default `flatbuffer_direct` writer has two int8 bugs.**
+   Both are fixed in `pipeline/convert.py`, and that writer is what we use.
+   - Depthwise conv biases (rank 1) get the weights' `quantized_dimension=3`,
+     and LiteRT refuses to load the model. Fixed by wrapping onnx2tf's bias
+     quantizer at runtime (the installed package is untouched).
+   - Ops that pass int8 values through unchanged (MAX_POOL_2D, RESHAPE,
+     RESIZE_BILINEAR, CONCATENATION) get different input and output
+     quantization. Their kernels don't rescale, so values would be misread;
+     TFLM even refuses MAX_POOL and CONCAT at Prepare. Fixed afterwards in
+     the flatbuffer: each group of tensors linked by such ops gets one
+     shared scale and zero point covering all their ranges (8 groups here).
+2. **The other writer, TensorFlow's converter (`--tflite_backend
+   tf_converter`), decomposes PRelu.** Each PRelu becomes
+   ABS/SUB/MUL/RELU/ADD wrapped in TRANSPOSEs: ~300 ops instead of 124,
+   and 40% of the on-device time once the convolutions were fast. That was
+   the first working path; native PRELU via the fixed `flatbuffer_direct`
+   took an inference from 2.6 s to 1.6 s. Accuracy is about the same
+   (palms 0.84–0.96 vs 0.90–0.94; a live camera hand 0.90 vs 0.87).
 3. **The zoo's own int8 ONNX isn't usable as a source.** It's ONNX Runtime
    QOperator format with `com.microsoft` opsets, and PRelu stays float
    (31 Quantize / 28 Dequantize nodes). We quantize from the float model
@@ -179,9 +195,14 @@ a pixel's IC channels with a filter row.
 Each output pixel's 75 input bytes (zero point for padding) are gathered
 into a 16-aligned row of 80, then the ACCX dot product as for pointwise.
 
-**Elementwise ABS/RELU/ADD/SUB/MUL** (155 layers, the PRelu
-decomposition): lookup tables, `main/pie_elementwise.cc`. Not SIMD; the
-point is that an int8 input has only 256 values.
+**Elementwise ops**: lookup tables, `main/pie_elementwise.cc`. Not SIMD;
+the point is that an int8 input has only 256 values.
+- **PRELU** (native, 26 layers): `out = T[x][c]`. Each layer's 256×C
+  table is made by running TFLM's own PRELU once on a fake 256×C input
+  (row v holds value v in every channel), so it's exact by construction.
+
+The tf_converter model's PRelu decomposition (155 layers) is also
+covered, so either model runs:
 - **ABS, RELU:** `out = T[x]`. The table is made by running TFLM's own
   kernel once on all 256 inputs (tensor data and dims swapped in for the
   call), so it's exact by construction.
@@ -192,22 +213,25 @@ point is that an int8 input has only 256 values.
 - **MUL** by the per-channel PRelu slope: one 256-entry table per channel
   when a channel has ≥ 64 elements, the same formula inline otherwise.
 
-| 96×96 inference | reference | + PIE pointwise | + PIE depthwise, im2col | + elementwise LUTs |
-|---|---|---|---|---|
-| total | 33.8 s | 11.7 s | 3.9 s | **2.6 s** (13×) |
-| pointwise 1×1 (29 layers) | ~22.8 s | 0.66 s | 0.70 s | 0.69 s |
-| depthwise 5×5 (23 layers) | 5.6 s | 5.6 s | 0.40 s | 0.44 s |
-| first conv 5×5 s2 | 2.7 s | 2.7 s | 0.053 s | 0.052 s |
-| ADD (51) / SUB (26) | 1.6 s | 1.6 s | 1.62 s | **0.84 s** |
-| ABS / RELU / MUL (26 each) | 0.74 s | 0.74 s | 0.74 s | **0.20 s** |
-| TRANSPOSE (56), pooling, resize (reference) | 0.4 s | 0.4 s | 0.38 s | 0.38 s |
+| 96×96 inference | reference | + PIE pointwise | + PIE depthwise, im2col | + elementwise LUTs | + native PRELU |
+|---|---|---|---|---|---|
+| total | 33.8 s | 11.7 s | 3.9 s | 2.6 s | **1.63 s** (21×) |
+| pointwise 1×1 (29 layers) | ~22.8 s | 0.66 s | 0.70 s | 0.69 s | 0.69 s |
+| depthwise 5×5 (23 layers) | 5.6 s | 5.6 s | 0.40 s | 0.44 s | 0.44 s |
+| first conv 5×5 s2 | 2.7 s | 2.7 s | 0.053 s | 0.052 s | 0.052 s |
+| ADD | 1.0 s (51) | 1.0 s | 1.06 s | 0.55 s | **0.26 s** (25) |
+| PRelu: SUB/ABS/MUL/RELU → PRELU | 1.3 s | 1.3 s | 1.3 s | 0.48 s | **0.057 s** |
+| TRANSPOSE (56 → 0) | 0.28 s | 0.28 s | 0.28 s | 0.28 s | **0** |
+| pooling, resize, pad (reference) | 0.1 s | 0.1 s | 0.1 s | 0.1 s | 0.13 s |
+
+The first four columns are the tf_converter model, the last the
+flatbuffer_direct one (124 ops, arena 291 KB instead of 375 KB).
 
 Correctness: `det golden` bit-exact at every step; `det pie verify on`
 re-runs the reference kernel after every PIE/LUT layer and compares: 0
-mismatches in all 53 conv and 155 elementwise layers.
+mismatches in all 53 conv and all elementwise layers, on both models.
 
-What's left is about evenly spread: convolutions 46%, ADD/SUB 32% (one
-fixed-point requantization per element), TRANSPOSE 11%.
+Now the convolutions are 72% of the time, ADD 16%.
 
 `det pie off` switches back to the reference kernels for A/B timing.
 `det pie stats` gives per-layer path and time.
@@ -218,21 +242,18 @@ fixed-point requantization per element), TRANSPOSE 11%.
 through TFLM on the board and compares the raw output tensors:
 
 ```
-inference 33824.7 ms; best score 0.941 (anchor 155)
+inference 1632.8 ms; best score 0.946 (anchor 155)
 vs host LiteRT (reference kernels): boxes 0/2016 differ, scores 0/504 differ, max |diff| 0 LSB -> BIT-EXACT
 ```
 
 ## Next steps (ideas, not done)
 
-- **Native PRELU** instead of the five-op decomposition: ~180 ops and
-  the TRANSPOSEs around them gone (onnx2tf's `flatbuffer_direct` writer
-  emits PRELU, but needs its rank-1 `quantized_dimension` bug patched).
-- **ADD/SUB requantization:** a cheaper exact form of the per-element
+- **ADD requantization:** a cheaper exact form of the per-element
   fixed-point multiply (32-bit high-multiply instead of generic int64).
 - **Pointwise tuning:** fused load+MAC (`ee.vmulas.s8.accx.ld.ip`), keep
   the pixel vector in `q` registers across output channels, zero-overhead
   `loop`.
-- **SRAM arena:** at 96 the arena is 375 KB. Putting the hot tensors in
+- **SRAM arena:** at 96 the arena is 291 KB. Putting the hot tensors in
   internal RAM avoids PSRAM latency.
 - **Calibration data:** more frames from our own camera, with hands.
 

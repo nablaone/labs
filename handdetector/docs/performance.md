@@ -1,7 +1,7 @@
 # Making the palm detector fast on the ESP32-S3
 
 How one inference of the OpenCV-zoo palm detector went from **137 s** to
-**2.6 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
+**1.63 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
 uses upstream TensorFlow Lite Micro and no vendor ML libraries. The model
 pipeline itself is in [model-pipeline.md](model-pipeline.md).
 
@@ -60,10 +60,11 @@ Per-op profile at 96×96 (`det prof`):
 | input 192 → 96 | 33.8 s | 4× (4× fewer pixels) |
 | + PIE pointwise 1×1 conv | 11.7 s | 2.9× |
 | + PIE depthwise 5×5, im2col for the first conv | 3.9 s | 3.0× |
-| + lookup-table elementwise ops | **2.6 s** | 1.5× |
+| + lookup-table elementwise ops | 2.6 s | 1.5× |
+| + native PRELU (different converter output) | **1.63 s** | 1.6× |
 
-Overall: **13× faster than reference kernels at the same input size,
-53× faster than the starting point.**
+Overall: **21× faster than reference kernels at the same input size,
+84× faster than the starting point.**
 
 ### 1. Smaller input: 192 → 96
 
@@ -143,28 +144,58 @@ requantization instead of three.
 - **Live frames:** a camera frame's model input was dumped (`det dump`)
   and run on the host. The scores matched the device byte for byte.
 
+### 5. Native PRELU (2.6 → 1.63 s)
+
+The table kernels made the PRelu decomposition cheaper, but it was still
+~180 ops (five per PRelu plus TRANSPOSEs), about 1 s. The fix was in the
+converter, not the firmware.
+
+onnx2tf's own TFLite writer (`flatbuffer_direct`) emits native PRELU and
+no TRANSPOSE at all: 124 ops instead of ~300. Its int8 output was unusable
+at first, so `pipeline/convert.py` fixes two bugs:
+- **Depthwise biases** got the weights' `quantized_dimension=3` on a 1-D
+  tensor, and the model wouldn't load. Fixed by wrapping onnx2tf's bias
+  quantizer at runtime.
+- **Pass-through ops** (MAX_POOL, RESHAPE, RESIZE, CONCAT) got different
+  input and output quantization, and their kernels don't rescale. Fixed
+  afterwards in the flatbuffer by giving each linked group of tensors one
+  shared scale and zero point.
+
+On the device, PRELU uses a 256×C table per layer, filled by TFLM's own
+PRELU on a fake 256×C input, so it's exact by construction.
+
+| | before | after |
+|---|---|---|
+| ops | ~300 | 124 |
+| PRelu cost (SUB/ABS/MUL/RELU + half the ADDs → PRELU) | ~0.76 s | 0.057 s |
+| TRANSPOSE | 0.28 s | 0 (none left) |
+| tensor arena | 375 KB | 291 KB |
+| inference | 2.6 s | **1.63 s** |
+
+This is a different int8 model, so it's not bit-identical to the old one.
+It has its own golden vectors, and the device matches them bit for bit.
+Accuracy is about the same: host palms 0.84–0.96 (before 0.90–0.94),
+worst no-hand 0.015 (before 0.05), a live camera hand 0.90 (before 0.87).
+
 ## Current status
 
-96×96, 2.6 s per inference (`det prof`):
+96×96, 1.63 s per inference (`det prof`):
 
 | op | ms | % | kernel |
 |---|---|---|---|
-| CONV_2D (30) | 745 | 28.7 | PIE pointwise + im2col |
-| ADD (51) | 553 | 21.3 | LUT + per-element requant |
-| DEPTHWISE_CONV_2D (23) | 438 | 16.9 | PIE |
-| SUB (26) | 284 | 10.9 | LUT + per-element requant |
-| TRANSPOSE (56) | 275 | 10.6 | reference |
-| MUL (26) | 104 | 4.0 | LUT |
-| MAX_POOL_2D (4) | 54 | 2.1 | reference |
-| ABS (26) | 48 | 1.8 | LUT |
-| RELU (26) | 48 | 1.8 | LUT |
-| RESIZE_BILINEAR (2) | 38 | 1.5 | reference |
-| PAD, CONCAT, RESHAPE | 10 | 0.4 | reference |
-| **total** | **2 595** | | |
+| CONV_2D (30) | 744 | 45.6 | PIE pointwise + im2col |
+| DEPTHWISE_CONV_2D (23) | 438 | 26.9 | PIE |
+| ADD (25) | 261 | 16.0 | LUT + per-element requant |
+| PRELU (26) | 57 | 3.5 | LUT |
+| MAX_POOL_2D (4) | 54 | 3.3 | reference |
+| PAD (8) | 40 | 2.5 | reference |
+| RESIZE_BILINEAR (2) | 38 | 2.3 | reference |
+| CONCAT, RESHAPE | 0.2 | 0.0 | reference |
+| **total** | **1 632** | | |
 
 Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
 preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
-about every 2.7 s.
+about every 1.7 s.
 
 Convolutions now run at about 57 M MAC/s (70 M MACs in ~1.2 s). That's
 28× the reference, but far from PIE's theoretical 16 MAC/cycle (3.8
@@ -173,22 +204,18 @@ PSRAM) and to the scalar 64-bit requantization of every output.
 
 ## What's left
 
-Ordered by expected payoff:
+The convolutions are now 72% of the time. Ordered by expected payoff:
 
-1. **Native PRELU.** Get onnx2tf's own writer (`flatbuffer_direct`) to
-   produce a loadable int8 model by patching its `quantized_dimension` bug
-   on 1-D tensors. That replaces five ops with one PRELU and probably
-   removes the TRANSPOSEs around it, about 1.1 s of the 2.6 s. The PRELU
-   would then need its own table kernel.
-2. **Cheaper exact requantization.** It runs once per output in every
-   conv and once per element in ADD/SUB. A hand-written 32-bit
-   high-multiply instead of the generic int64 code, still exact.
-3. **Internal SRAM for hot tensors.** The arena at 96×96 is 375 KB. Small
+1. **Cheaper exact requantization.** It runs once per output in every
+   conv and once per element in ADD. A hand-written 32-bit high-multiply
+   instead of the generic int64 code, still exact.
+2. **Internal SRAM for hot tensors.** The arena at 96×96 is 291 KB. Small
    late layers and scratch buffers could live in internal RAM instead of
    PSRAM.
-4. **Pointwise tuning.** Fused load+multiply (`ee.vmulas.s8.accx.ld.ip`),
+3. **Pointwise tuning.** Fused load+multiply (`ee.vmulas.s8.accx.ld.ip`),
    keep a pixel's vector in registers across output channels, use the
    zero-overhead `loop`.
+4. **MAX_POOL / PAD / RESIZE** on reference kernels: 0.13 s together.
 
 ## Pitfalls hit along the way
 

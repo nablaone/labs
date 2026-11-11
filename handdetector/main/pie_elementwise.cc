@@ -17,6 +17,11 @@
  *             slope). out = requant((a + off1) * (b_c + off2)): one 256-entry
  *             table per channel when channels are long (H*W >= 64), the
  *             same formula inline otherwise.
+ *  PRELU      native op (models converted with onnx2tf's own writer):
+ *             out = T[x][c] with a per-channel slope along the last axis.
+ *             The [256][C] table is produced by TFLM's own kernel on a fake
+ *             256 x C input (row v = value v in every channel), so it is
+ *             exact by construction; rebuilt only if the slopes change.
  *
  * All arithmetic uses TFLM's own MultiplyByQuantizedMultiplier* helpers,
  * so results are bit-exact (`det pie verify on` checks every layer).
@@ -43,16 +48,16 @@ namespace {
 using tflite::micro::MultiplyByQuantizedMultiplier;
 using tflite::micro::MultiplyByQuantizedMultiplierSmallerThanOneExp;
 
-enum Op { ABS, RELU, ADD, SUB, MUL, N_OPS };
-const char *const op_name[] = { "ABS", "RELU", "ADD", "SUB", "MUL" };
+enum Op { ABS, RELU, ADD, SUB, MUL, PRELU, N_OPS };
+const char *const op_name[] = { "ABS", "RELU", "ADD", "SUB", "MUL", "PRELU" };
 TFLMRegistration ref[N_OPS];
 
 struct Layer {
 	const TfLiteNode *node;
 	bool ready;
 	int8_t lut[256];          /* ABS, RELU */
-	int8_t *b_copy;           /* MUL: the constant input it was built for */
-	int8_t *mul_lut;          /* MUL: [C][256] */
+	int8_t *b_copy;           /* MUL, PRELU: the constant input it was built for */
+	int8_t *mul_lut;          /* MUL: [C][256]; PRELU: [256][C] */
 	int channels;
 };
 constexpr int kMaxLayers = 256;
@@ -232,6 +237,55 @@ bool eval_mul(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 	return true;
 }
 
+/* ---- PRELU with a per-channel slope on the last axis ---- */
+
+bool eval_prelu(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
+{
+	auto *in = const_cast<TfLiteEvalTensor *>(tflite::micro::GetEvalInput(ctx, node, 0));
+	const TfLiteEvalTensor *alpha = tflite::micro::GetEvalInput(ctx, node, 1);
+	TfLiteEvalTensor *out = tflite::micro::GetEvalOutput(ctx, node, 0);
+	if (in->type != kTfLiteInt8 || alpha->type != kTfLiteInt8 || out->type != kTfLiteInt8) return false;
+	if (!same_dims(in, out) || in->dims->size != 4) return false;
+	const int C = in->dims->data[3];
+	if ((int)flat(alpha) != C || alpha->dims->data[alpha->dims->size - 1] != C) return false;
+
+	if (!L->mul_lut || L->channels != C || memcmp(L->b_copy, alpha->data.int8, C) != 0) {
+		heap_caps_free(L->mul_lut);
+		heap_caps_free(L->b_copy);
+		L->mul_lut = (int8_t *)heap_caps_malloc((size_t)256 * C, MALLOC_CAP_SPIRAM);
+		L->b_copy = (int8_t *)heap_caps_malloc(C, MALLOC_CAP_SPIRAM);
+		int8_t *probe = (int8_t *)heap_caps_malloc((size_t)256 * C, MALLOC_CAP_SPIRAM);
+		bool ok = L->mul_lut && L->b_copy && probe;
+		if (ok) {
+			for (int v = 0; v < 256; v++) memset(probe + v * C, v - 128, C);
+			struct { int size; int data[4]; } dims = { 4, { 1, 1, 256, C } };
+			TfLitePtrUnion in_data = in->data, out_data = out->data;
+			TfLiteIntArray *in_dims = in->dims, *out_dims = out->dims;
+			in->data.int8 = probe;
+			out->data.int8 = L->mul_lut;
+			in->dims = out->dims = reinterpret_cast<TfLiteIntArray *>(&dims);
+			ok = ref[PRELU].invoke(ctx, node) == kTfLiteOk;
+			in->data = in_data; out->data = out_data;
+			in->dims = in_dims; out->dims = out_dims;
+		}
+		heap_caps_free(probe);
+		if (!ok) {
+			heap_caps_free(L->mul_lut); heap_caps_free(L->b_copy);
+			L->mul_lut = L->b_copy = nullptr;
+			return false;
+		}
+		memcpy(L->b_copy, alpha->data.int8, C);
+		L->channels = C;
+	}
+	const int8_t *x = in->data.int8;
+	int8_t *y = out->data.int8;
+	const int8_t *t = L->mul_lut + 128 * C;  /* row for x = 0 */
+	const size_t pixels = flat(out) / C;
+	for (size_t p = 0; p < pixels; p++, x += C, y += C)
+		for (int c = 0; c < C; c++) y[c] = t[x[c] * C + c];
+	return true;
+}
+
 /* ---- dispatch ---- */
 
 template <Op op>
@@ -247,6 +301,7 @@ TfLiteStatus Eval(TfLiteContext *ctx, TfLiteNode *node)
 		case ADD: ok = eval_addsub<tflite::micro::OpDataAdd>(false, ctx, node); break;
 		case SUB: ok = eval_addsub<tflite::micro::OpDataSub>(true, ctx, node); break;
 		case MUL: ok = eval_mul(L, ctx, node); break;
+		case PRELU: ok = eval_prelu(L, ctx, node); break;
 		default: break;
 		}
 	}
@@ -286,6 +341,7 @@ TFLMRegistration PieRegister_RELU() { return wrap<RELU>(tflite::micro::Register_
 TFLMRegistration PieRegister_ADD() { return wrap<ADD>(tflite::micro::Register_ADD()); }
 TFLMRegistration PieRegister_SUB() { return wrap<SUB>(tflite::micro::Register_SUB()); }
 TFLMRegistration PieRegister_MUL() { return wrap<MUL>(tflite::micro::Register_MUL()); }
+TFLMRegistration PieRegister_PRELU() { return wrap<PRELU>(tflite::micro::Register_PRELU()); }
 
 void pie_elementwise_reset_stats(void)
 {
