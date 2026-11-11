@@ -1,7 +1,7 @@
 # Making the palm detector fast on the ESP32-S3
 
 How one inference of the OpenCV-zoo palm detector went from **137 s** to
-**0.66 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
+**0.48 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
 uses upstream TensorFlow Lite Micro and no vendor ML libraries. The model
 pipeline itself is in [model-pipeline.md](model-pipeline.md).
 
@@ -65,10 +65,11 @@ Per-op profile at 96×96 (`det prof`):
 | + fast exact requantization, cache-blocked pointwise | 1.04 s | 1.6× |
 | + both CPU cores | 0.81 s | 1.28× |
 | + CONV→ADD→PRELU fusion | 0.78 s | 1.06× |
-| + own MAX_POOL / PAD / RESIZE | **0.66 s** | 1.18× |
+| + own MAX_POOL / PAD / RESIZE | 0.66 s | 1.18× |
+| + depthwise rework | **0.48 s** | 1.39× |
 
-Overall: **51× faster than reference kernels at the same input size,
-207× faster than the starting point.**
+Overall: **71× faster than reference kernels at the same input size,
+288× faster than the starting point.**
 
 ### 1. Smaller input: 192 → 96
 
@@ -344,23 +345,75 @@ is smaller than the detector's. They are static now.
 
 ## Current status
 
-96×96, 0.66 s per inference (`det prof`, golden input):
+96×96, 0.48 s per inference (`det prof`, golden input):
 
 | op | ms | % | kernel |
 |---|---|---|---|
-| CONV_2D (30) | 338 | 51.0 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
-| DEPTHWISE_CONV_2D (23) | 264 | 39.8 | PIE, 2 cores |
-| ADD (25: 4 unfused) | 30 | 4.5 | LUT + requant, 2 cores |
-| PRELU (26: 4 unfused) | 11 | 1.6 | LUT, 2 cores |
-| PAD (8) | 9.9 | 1.5 | own, 2 cores |
-| RESIZE_BILINEAR (2) | 6.8 | 1.0 | own, 2 cores |
-| MAX_POOL_2D (4) | 3.5 | 0.5 | PIE, 2 cores |
+| CONV_2D (30) | 340 | 71.6 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
+| DEPTHWISE_CONV_2D (23) | 73 | 15.4 | PIE, row ring in SRAM, 2 cores |
+| ADD (25: 4 unfused) | 30 | 6.4 | LUT + requant, 2 cores |
+| PRELU (26: 4 unfused) | 11 | 2.3 | LUT, 2 cores |
+| PAD (8) | 9.9 | 2.1 | own, 2 cores |
+| RESIZE_BILINEAR (2) | 7.0 | 1.5 | own, 2 cores |
+| MAX_POOL_2D (4) | 3.4 | 0.7 | PIE, 2 cores |
 | CONCAT, RESHAPE | 0.2 | 0.0 | reference |
-| **total** | **663** | | |
+| **total** | **475** | | |
 
 Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
 preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
-about every 0.87 s.
+about every 0.56 s.
+
+### 10. Depthwise rework (0.66 → 0.48 s)
+
+Depthwise took 264 ms, ~230 cycles per output value, for work that is 25
+multiply-adds shared over 16 channels per SIMD instruction. Before
+changing anything, the kernel got per-phase cycle counters (`det pie
+stats` prints them):
+
+| phase | cycles per output |
+|---|---|
+| padded copy of the whole input (one core) | 34 ms in total |
+| 25-tap MAC loop | 44–88 |
+| unpack QACC, requantize, store | **~160** |
+
+Two causes, both visible only by measuring:
+- **The padded copy lived in PSRAM.** At 48×48×32 it is 86.5 KB; internal
+  RAM had no block that large, and `get_scratch` silently fell back. So
+  every window read went to PSRAM.
+- **The output step called `memcpy` per value.** The 20-bit lane unpack
+  used `memcpy` for an unaligned 4-byte read, which the compiler turned
+  into a real function call, 16 times per group. The per-channel bias,
+  multiplier and shift pointers were reloaded from the lambda's captures
+  for every value.
+
+Changes (`main/pie_conv.cc`, `dw_conv`):
+1. **Ring of padded rows instead of a padded copy.** Each core keeps
+   KH = 5 padded rows (≤ 13 KB) in internal RAM and fills them as it moves
+   down its band of output rows. The padding work is split over both
+   cores, and the window reads hit SRAM. The 86.5 KB buffer is gone.
+2. **MAC loop:** weights regrouped as [16-channel group][tap][16], so a
+   group's 25 taps are contiguous. Each 5-tap kernel row is one asm block
+   that loads the next weight in the same instruction as the multiply
+   (`ee.vmulas.s8.qacc.ld.ip`) and the next input one instruction ahead.
+3. **Output step** in its own non-inlined function (inlined, the compiler
+   spilled most of it to the stack): the 16 lanes unpacked from 5 aligned
+   words with fixed shifts, per-channel parameters precomputed into one
+   16-byte struct, the requantization branch-free (specialized for the
+   usual left shift 0, right shift ≥ 1), clamp with `min`/`max`, 16 bytes
+   stored as 4 words.
+
+| phase (cycles per output) | before | after |
+|---|---|---|
+| padded rows | 34 ms copy, one core | 9 |
+| MAC loop | 53 | 15 |
+| output step | 160 | 40 |
+| **depthwise total** | **264 ms** | **73 ms** |
+| inference (golden) | 663 ms | **476 ms** |
+| live detector | 657 ms | **471 ms** |
+
+Still bit-exact (golden). The output step is now ~25 instructions per
+value, mostly the exact requantization (64-bit multiply, two rounding
+shifts); maybe 10–15 ms more is in it.
 
 ## Tried: activations in internal RAM (not kept)
 
@@ -407,11 +460,13 @@ following 1×1 conv, so the intermediate never leaves internal RAM.
 
 Ordered by expected payoff:
 
-1. **Depthwise** (264 ms): a padded copy of every input, QACC write-out
-   and 20-bit unpacking in C, 25 load pairs per 16 channels.
-2. **Pointwise inner loop:** fused load+multiply
-   (`ee.vmulas.s8.accx.ld.ip`), several outputs per input load, the
-   zero-overhead `loop`.
+1. **Pointwise 1×1 conv** (340 ms, 72%): likely the same story as
+   depthwise had: a scalar output step (requant + fused ADD/PRELU, one
+   value at a time) around a short dot product. Measure the phases first,
+   then: 16 output channels per QACC pass instead of one ACCX dot product
+   per output, fused load+multiply, output step out of line.
+2. **Depthwise output step** (40 cycles/output): a few more instructions
+   in the exact requantization; ~10–15 ms.
 3. **PSRAM traffic:** both cores share it (each runs ~40% slower when
    both work). The whole arena in internal RAM doesn't fit (see above).
    Options: row tiling and DEPTHWISE→1×1 fusion through internal RAM,

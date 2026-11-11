@@ -40,6 +40,7 @@
 #include "freertos/FreeRTOS.h"
 #include "esp_cpu.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 
 #include "tensorflow/lite/micro/kernels/conv.h"
@@ -73,12 +74,20 @@ struct Layer {
 	int kh, kw;
 	int k16;          /* conv: row length (KH*KW*IC rounded up to 16) */
 	int8_t *w;        /* conv: [oc][k16]; depthwise: [kh*kw][c]; aligned */
-	int32_t *bias;    /* bias + input_offset * sum(w), per output channel */
+	int32_t *bias;    /* conv: bias + input_offset * sum(w), per output channel */
+	struct DwChan *dwq;  /* depthwise: per-channel bias and requant params */
+	bool dw_simple;      /* depthwise: every channel has ls == 0, rs >= 1 */
 	/* last inference */
 	Kind kind;
 	int64_t us;
 	int mismatches;   /* verify mode */
 	bool fused;       /* did ADD/PRELU in its output step (pie_fusion.h) */
+	/* depthwise phase profile, last inference: setup (caller), then
+	 * padded-row fill, MAC loop and output step (cycles, per core) */
+	int64_t dw_copy_us;
+	uint32_t dw_mac_cyc[2], dw_out_cyc[2], dw_fill_cyc[2];
+	int dw_oh, dw_ow, dw_stride;
+	bool dw_scratch_ext;  /* padded rows landed in PSRAM */
 };
 constexpr int kMaxLayers = 64;
 Layer layers[kMaxLayers];
@@ -321,36 +330,119 @@ bool dw_eligible(const TfLiteDepthwiseConvParams &p, const TfLiteEvalTensor *in,
 	return true;
 }
 
+/* Per-channel output parameters for depthwise, precomputed so the output
+ * step is branch-free: pie_mbqm() split into a left shift, the rounding
+ * high multiply and a rounding right shift (half/nz encode rs == 0). */
+struct DwChan {
+	int32_t bias;   /* bias + input_offset * sum(w) */
+	int32_t mult;
+	int32_t half;   /* rs ? 1 << (rs - 1) : 0 */
+	uint8_t ls, rs, nz;
+};
+
 bool prepare_dw(Layer *L, const TfLiteEvalTensor *filter, const TfLiteEvalTensor *bias,
 		const micro::OpDataConv &d)
 {
 	L->kh = filter->dims->data[1];
 	L->kw = filter->dims->data[2];
 	L->ic = L->oc = filter->dims->data[3];
-	const size_t n = (size_t)L->kh * L->kw * L->oc;
-	L->w = (int8_t *)heap_caps_aligned_alloc(16, n, MALLOC_CAP_SPIRAM);
-	L->bias = (int32_t *)heap_caps_malloc(L->oc * sizeof(int32_t), MALLOC_CAP_SPIRAM);
-	if (!L->w || !L->bias) return false;
-	memcpy(L->w, filter->data.int8, n);  /* [ky][kx][c] */
+	const int C = L->oc, T = L->kh * L->kw;
+	/* weights regrouped [g][tap][16]: one 16-channel group's taps are
+	 * contiguous, so the MAC loop walks them with a +16 post-increment */
+	L->w = (int8_t *)heap_caps_aligned_alloc(16, (size_t)T * C, MALLOC_CAP_SPIRAM);
+	L->dwq = (DwChan *)heap_caps_malloc(C * sizeof(DwChan), MALLOC_CAP_SPIRAM);
+	if (!L->w || !L->dwq) return false;
+	const int8_t *f = filter->data.int8;  /* [tap][c] */
+	for (int g = 0; g < C; g += 16)
+		for (int t = 0; t < T; t++)
+			memcpy(L->w + (size_t)g * T + t * 16, f + (size_t)t * C + g, 16);
 	const int32_t input_offset = -d.input_zero_point;
-	for (int c = 0; c < L->oc; c++) {
+	for (int c = 0; c < C; c++) {
 		int32_t s = 0;
-		for (int t = 0; t < L->kh * L->kw; t++) s += L->w[t * L->oc + c];
-		L->bias[c] = (bias ? bias->data.i32[c] : 0) + input_offset * s;
+		for (int t = 0; t < T; t++) s += f[t * C + c];
+		DwChan &q = L->dwq[c];
+		q.bias = (bias ? bias->data.i32[c] : 0) + input_offset * s;
+		q.mult = d.per_channel_output_multiplier[c];
+		const int sh = d.per_channel_output_shift[c];
+		q.ls = sh > 0 ? sh : 0;
+		q.rs = sh < 0 ? -sh : 0;
+		q.nz = q.rs != 0;
+		q.half = q.rs ? 1 << (q.rs - 1) : 0;
 	}
+	L->dw_simple = true;
+	for (int c = 0; c < C; c++) L->dw_simple &= L->dwq[c].ls == 0 && L->dwq[c].rs >= 1;
 	return true;
 }
 
-/* Lane i of a 160-bit QACC half stored little-endian at b: bits
- * [20i+19 : 20i], signed. (TRM: EE.VMULAS.S8.QACC lane layout.) */
-inline int32_t lane20(const uint8_t *b, int i)
+/* Signed 20-bit field in the low bits of u. */
+inline int32_t sx20(uint32_t u) { return (int32_t)(u << 12) >> 12; }
+
+/* Same result as requant(v, mult, shift, ...) with pie_mbqm.
+ * SIMPLE: ls == 0 and rs >= 1 for every channel (the usual case), so the
+ * rounding needs no masks. */
+template <bool SIMPLE>
+inline int32_t dw_rq(int32_t v, const DwChan &q)
 {
-	const int bit = 20 * i;
-	uint32_t v;
-	memcpy(&v, b + (bit >> 3), 4);
-	return (int32_t)((v >> (bit & 7)) << 12) >> 12;
+	const int32_t a = SIMPLE ? v : (int32_t)((uint32_t)v << q.ls);
+	int32_t h = (int32_t)(((int64_t)a * q.mult + (1 << 30)) >> 31);
+	if (SIMPLE) return (h + q.half - (h < 0)) >> q.rs;
+	return (h + q.half - (int32_t)(((uint32_t)h >> 31) & q.nz)) >> q.rs;
 }
 
+/*
+ * Output step for one 16-channel group: QACC as stored by ee.st.qacc_*
+ * (lanes 0..7 in words 0..4, lanes 8..15 in words 8..12, 20 bits each),
+ * + bias, requantize, clamp, 16 bytes to dst (16-byte aligned).
+ * Not inlined, so its own register allocation doesn't compete with the
+ * MAC loop's: inlined, the compiler spilled most of it to the stack.
+ */
+template <bool SIMPLE>
+__attribute__((noinline)) void dw_out16(const uint32_t *acc, const DwChan *q, int8_t *dst,
+					int32_t off, int32_t lo, int32_t hi)
+{
+	alignas(4) int8_t o[16];
+	for (int half = 0; half < 2; half++, acc += 8, q += 8) {
+		const uint32_t w0 = acc[0], w1 = acc[1], w2 = acc[2], w3 = acc[3], w4 = acc[4];
+		const int32_t v[8] = {
+			sx20(w0), sx20((w0 >> 20) | (w1 << 12)), sx20(w1 >> 8), sx20((w1 >> 28) | (w2 << 4)),
+			sx20((w2 >> 16) | (w3 << 16)), sx20(w3 >> 4), sx20((w3 >> 24) | (w4 << 8)), (int32_t)w4 >> 12,
+		};
+		for (int i = 0; i < 8; i++) {
+			int32_t h = dw_rq<SIMPLE>(v[i] + q[i].bias, q[i]) + off;
+			h = h < lo ? lo : h;
+			h = h > hi ? hi : h;
+			o[half * 8 + i] = (int8_t)h;
+		}
+	}
+	uint32_t *d = reinterpret_cast<uint32_t *>(dst);
+	const uint32_t *s = reinterpret_cast<const uint32_t *>(o);
+	d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+}
+
+/* Per-core ring of KH padded input rows, internal RAM. */
+int8_t *ring_buf[2];
+size_t ring_size[2];
+
+int8_t *get_ring(int core, size_t n)
+{
+	if (n <= ring_size[core]) return ring_buf[core];
+	heap_caps_free(ring_buf[core]);
+	ring_buf[core] = (int8_t *)heap_caps_aligned_alloc(16, n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+	if (!ring_buf[core]) ring_buf[core] = (int8_t *)heap_caps_aligned_alloc(16, n, MALLOC_CAP_SPIRAM);
+	ring_size[core] = ring_buf[core] ? n : 0;
+	return ring_buf[core];
+}
+
+/*
+ * Depthwise conv, 16 channels per QACC pass.
+ *
+ * Input rows are padded into a small per-core ring (KH rows of PW*C
+ * bytes, zero point outside the image) as the core walks down its band of
+ * output rows, so every tap is in bounds and 16-byte aligned, the padding
+ * work is split over both cores, and the window reads hit internal RAM.
+ * A 5-wide kernel row is one asm block that loads the next input/weight
+ * while multiplying the current pair (EE.VMULAS.S8.QACC.LD.IP).
+ */
 bool dw_conv(const Layer *L, const TfLiteDepthwiseConvParams &p, const micro::OpDataConv &d,
 	     const TfLiteEvalTensor *in, TfLiteEvalTensor *out)
 {
@@ -358,64 +450,106 @@ bool dw_conv(const Layer *L, const TfLiteDepthwiseConvParams &p, const micro::Op
 	const int oh = out->dims->data[1], ow = out->dims->data[2];
 	const int sh = p.stride_height, sw = p.stride_width;
 	const int ph = d.padding.height, pw = d.padding.width;
+	const int kh = L->kh, kw = L->kw, T = kh * kw;
 	const int8_t zp = (int8_t)d.input_zero_point;
-
-	/* Padded input: covers every tap of every output, zero point outside
-	 * the image. Rows are PW*C bytes, a multiple of 16. */
-	const int PH = (oh - 1) * sh + L->kh, PW = (ow - 1) * sw + L->kw;
+	const int PW = (ow - 1) * sw + kw;
 	const size_t prow = (size_t)PW * C;
-	int8_t *pad = get_scratch((size_t)PH * prow);
-	if (!pad) return false;
-	for (int y = 0; y < PH; y++) {
-		int8_t *r = pad + y * prow;
-		const int iy = y - ph;
-		if (iy < 0 || iy >= ih) { memset(r, zp, prow); continue; }
-		const int xa = pw, xb = pw + iw < PW ? pw + iw : PW;  /* padded x range holding image */
-		memset(r, zp, (size_t)xa * C);
-		memcpy(r + (size_t)xa * C, in->data.int8 + (size_t)iy * iw * C, (size_t)(xb - xa) * C);
-		if (xb < PW) memset(r + (size_t)xb * C, zp, (size_t)(PW - xb) * C);
-	}
 
-	const int32_t *mult = d.per_channel_output_multiplier, *shift = d.per_channel_output_shift;
+	const int64_t tc0 = esp_timer_get_time();
+	int8_t *rings[2] = { get_ring(0, kh * prow), get_ring(1, kh * prow) };
+	if (!rings[0] || !rings[1]) return false;
+	Layer *ML = const_cast<Layer *>(L);
+	ML->dw_scratch_ext = esp_ptr_external_ram(rings[0]) || esp_ptr_external_ram(rings[1]);
+	ML->dw_oh = oh; ML->dw_ow = ow; ML->dw_stride = sh;
+	ML->dw_mac_cyc[0] = ML->dw_mac_cyc[1] = ML->dw_out_cyc[0] = ML->dw_out_cyc[1] = 0;
+	ML->dw_fill_cyc[0] = ML->dw_fill_cyc[1] = 0;
+	ML->dw_copy_us = esp_timer_get_time() - tc0;
+
+	const int8_t *src = in->data.int8;
+	int8_t *dst0 = out->data.int8;
+	const int8_t *wts = L->w;
+	const DwChan *chan = L->dwq;
+	const bool simple = L->dw_simple;
 	const int32_t out_off = d.output_zero_point, lo = d.output_activation_min, hi = d.output_activation_max;
-	const int step = C;  /* next tap along x, both in input and weights */
-	pie_parallel_for(oh, [&](int oy0, int oy1) {
-	alignas(16) uint8_t acc[64];
-	int8_t *dst = out->data.int8 + (size_t)oy0 * ow * C;
+
+	pie_parallel_for(oh, [=](int oy0, int oy1) {
+	const int core = xPortGetCoreID();
+	int8_t *const ring = rings[core];
+	const int step = C;  /* next tap along x, in the padded rows */
+	alignas(16) uint32_t acc[16];
+	uint32_t mac_cyc = 0, out_cyc = 0, fill_cyc = 0;
+	int next = oy0 * sh;  /* next padded row to fill */
 	for (int oy = oy0; oy < oy1; oy++) {
+		/* bring rows oy*sh .. oy*sh+kh-1 into the ring */
+		const uint32_t cf0 = esp_cpu_get_cycle_count();
+		for (const int last = oy * sh + kh - 1; next <= last; next++) {
+			int8_t *r = ring + (size_t)(next % kh) * prow;
+			const int iy = next - ph;
+			if (iy < 0 || iy >= ih) { memset(r, zp, prow); continue; }
+			const int xa = pw, xb = pw + iw < PW ? pw + iw : PW;
+			memset(r, zp, (size_t)xa * C);
+			memcpy(r + (size_t)xa * C, src + (size_t)iy * iw * C, (size_t)(xb - xa) * C);
+			if (xb < PW) memset(r + (size_t)xb * C, zp, (size_t)(PW - xb) * C);
+		}
+		fill_cyc += esp_cpu_get_cycle_count() - cf0;
+		const int8_t *rows[8];
+		for (int ky = 0; ky < kh; ky++) rows[ky] = ring + (size_t)((oy * sh + ky) % kh) * prow;
+		int8_t *dst = dst0 + (size_t)oy * ow * C;
 		for (int ox = 0; ox < ow; ox++) {
-			const int8_t *base = pad + (size_t)oy * sh * prow + (size_t)ox * sw * C;
+			const size_t xo = (size_t)ox * sw * C;
 			for (int g = 0; g < C; g += 16, dst += 16) {
+				const uint32_t c0 = esp_cpu_get_cycle_count();
+				const int8_t *w = wts + (size_t)g * T;
 				asm volatile("ee.zero.qacc");
-				for (int ky = 0; ky < L->kh; ky++) {
-					const int8_t *x = base + ky * prow + g;
-					const int8_t *w = L->w + (size_t)ky * L->kw * C + g;
-					for (int kx = 0; kx < L->kw; kx++) {
+				for (int ky = 0; ky < kh; ky++) {
+					const int8_t *x = rows[ky] + xo + g;
+					if (kw == 5) {
 						asm volatile(
 							"ee.vld.128.xp q0, %0, %2\n\t"
-							"ee.vld.128.xp q1, %1, %2\n\t"
+							"ee.vld.128.ip q1, %1, 16\n\t"
+							"ee.vld.128.xp q2, %0, %2\n\t"
+							"ee.vmulas.s8.qacc.ld.ip q3, %1, 16, q0, q1\n\t"
+							"ee.vld.128.xp q0, %0, %2\n\t"
+							"ee.vmulas.s8.qacc.ld.ip q1, %1, 16, q2, q3\n\t"
+							"ee.vld.128.xp q2, %0, %2\n\t"
+							"ee.vmulas.s8.qacc.ld.ip q3, %1, 16, q0, q1\n\t"
+							"ee.vld.128.xp q0, %0, %2\n\t"
+							"ee.vmulas.s8.qacc.ld.ip q1, %1, 16, q2, q3\n\t"
 							"ee.vmulas.s8.qacc q0, q1\n\t"
 							: "+a"(x), "+a"(w)
 							: "a"(step)
 							: "memory");
+					} else {
+						for (int kx = 0; kx < kw; kx++)
+							asm volatile(
+								"ee.vld.128.xp q0, %0, %2\n\t"
+								"ee.vld.128.ip q1, %1, 16\n\t"
+								"ee.vmulas.s8.qacc q0, q1\n\t"
+								: "+a"(x), "+a"(w)
+								: "a"(step)
+								: "memory");
 					}
 				}
-				/* QACC_L = lanes 0..7 -> acc[0..20), QACC_H = lanes 8..15 -> acc[32..52) */
-				uint8_t *a = acc;
+				const uint32_t c1 = esp_cpu_get_cycle_count();
+				/* QACC_L = lanes 0..7 -> acc[0..5), QACC_H = lanes 8..15 -> acc[8..13) */
+				uint32_t *a = acc;
 				asm volatile(
 					"ee.st.qacc_l.l.128.ip %0, 16\n\t"
 					"ee.st.qacc_l.h.32.ip %0, 16\n\t"
 					"ee.st.qacc_h.l.128.ip %0, 16\n\t"
 					"ee.st.qacc_h.h.32.ip %0, 0\n\t"
 					: "+a"(a) : : "memory");
-				for (int i = 0; i < 16; i++) {
-					const int c = g + i;
-					int32_t v = (i < 8 ? lane20(acc, i) : lane20(acc + 32, i - 8)) + L->bias[c];
-					dst[i] = (int8_t)requant(v, mult[c], shift[c], out_off, lo, hi);
-				}
+				if (simple) dw_out16<true>(acc, chan + g, dst, out_off, lo, hi);
+				else dw_out16<false>(acc, chan + g, dst, out_off, lo, hi);
+				const uint32_t c2 = esp_cpu_get_cycle_count();
+				mac_cyc += c1 - c0;
+				out_cyc += c2 - c1;
 			}
 		}
 	}
+	ML->dw_mac_cyc[core] += mac_cyc;
+	ML->dw_out_cyc[core] += out_cyc;
+	ML->dw_fill_cyc[core] += fill_cyc;
 	});
 	return true;
 }
@@ -518,7 +652,7 @@ TfLiteStatus DwEval(TfLiteContext *ctx, TfLiteNode *node)
 	bool pie = enabled && L && dw_eligible(params, in, filter, out);
 	if (pie && !L->prepared) {
 		L->prepared = true;
-		if (!prepare_dw(L, filter, bias, data)) { heap_caps_free(L->w); L->w = nullptr; }
+		if (!prepare_dw(L, filter, bias, data)) { heap_caps_free(L->w); L->w = nullptr; heap_caps_free(L->dwq); L->dwq = nullptr; }
 	}
 	if (pie && (!L->w || !dw_conv(L, params, data, in, out))) pie = false;
 	if (!pie) {
@@ -648,6 +782,25 @@ extern "C" void pie_print_stats(void)
 	}
 	for (int k = 0; k < 4; k++)
 		if (count[k]) printf("%-9s %2d layers %10.1f ms\n", kind_name[k], count[k], us[k] / 1e3);
+	/* depthwise phases: cycles per output value, summed over both cores */
+	printf("\ndepthwise phases (cycles per output, both cores summed):\n");
+	printf("%-3s %-14s %6s %8s %8s %8s %8s %s\n", "#", "out", "stride", "ms", "fill c/o", "MAC c/o", "out c/o", "rows in");
+	double t_fill = 0, t_mac = 0, t_out = 0, n_out = 0;
+	for (int i = 0; i < n_layers; i++) {
+		const Layer &L = layers[i];
+		if (L.kind != DEPTHWISE) continue;
+		const double n = (double)L.dw_oh * L.dw_ow * L.oc;
+		const double mac = (double)L.dw_mac_cyc[0] + L.dw_mac_cyc[1], o = (double)L.dw_out_cyc[0] + L.dw_out_cyc[1];
+		const double fl = (double)L.dw_fill_cyc[0] + L.dw_fill_cyc[1];
+		char sh[24];
+		snprintf(sh, sizeof(sh), "%dx%dx%d", L.dw_oh, L.dw_ow, L.oc);
+		printf("%-3d %-14s %6d %8.2f %8.1f %8.1f %8.1f %s\n", i, sh, L.dw_stride, L.us / 1e3, fl / n,
+		       mac / n, o / n, L.dw_scratch_ext ? "PSRAM" : "internal");
+		t_fill += fl; t_mac += mac; t_out += o; n_out += n;
+	}
+	if (n_out > 0)
+		printf("all (core time, both cores): row fill %.1f c/o %.1f ms, MAC %.1f c/o %.1f ms, output step %.1f c/o %.1f ms\n",
+		       t_fill / n_out, t_fill / 240e3, t_mac / n_out, t_mac / 240e3, t_out / n_out, t_out / 240e3);
 	if (verify) printf("%s\n", bad ? "VERIFY MISMATCH" : "verify: all PIE layers bit-exact");
 	pie_elementwise_print_stats();
 	pie_data_print_stats();

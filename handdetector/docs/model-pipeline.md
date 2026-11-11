@@ -22,7 +22,7 @@ Measured 2026-11-11 on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM).
 | int8 .tflite | 1175 KB | 1175 KB | 1179 KB |
 | TFLM arena | 1239 KB (PSRAM) | — | 291 KB (PSRAM) |
 | inference, TFLM reference kernels | 137 s | ~60 s (est.) | 33.8 s |
-| **inference, own PIE/LUT kernels, 2 cores, fusion** | — | — | **0.66 s** |
+| **inference, own PIE/LUT kernels, 2 cores, fusion** | — | — | **0.48 s** |
 | host int8 palm scores (3 test images) | 0.95–0.96 | 0.97–0.98 | 0.84–0.96 |
 | host int8 worst no-hand score | 0.24 | 0.07 | 0.015 |
 
@@ -34,7 +34,7 @@ The 192 and 128 columns and the reference-kernel row are from the first
 LiteRT running reference kernels (`det golden`). On TFLM's reference
 kernels it's slow: about 2 M MAC/s, roughly 120 cycles per
 multiply-accumulate (see "Where the time goes"). Hand-written PIE SIMD
-and lookup-table kernels on both cores, with conv→add→prelu fusion and own pool/pad/resize, bring it to 0.66 s, still bit-exact
+and lookup-table kernels on both cores, with conv→add→prelu fusion, own pool/pad/resize and a reworked depthwise, bring it to 0.48 s, still bit-exact
 ([performance.md](performance.md) tells that story).
 
 ## Pipeline
@@ -240,7 +240,7 @@ the building blocks in CPU cycles and self-checks the fast requantization.
 After this table, a faster exact requantization and cache-blocked
 pointwise convs brought the total to 1.04 s, and splitting the kernels
 across both cores to 0.81 s, CONV→ADD→PRELU fusion to 0.78 s, and own
-MAX_POOL/PAD/RESIZE kernels to **0.66 s** (steps 6–9 in [performance.md](performance.md)).
+MAX_POOL/PAD/RESIZE kernels to 0.66 s, and a reworked depthwise to **0.48 s** (steps 6–10 in [performance.md](performance.md)).
 
 ## Correctness check on the device
 

@@ -141,13 +141,13 @@ make -C model flash-model  # model into its partition; no firmware rebuild neede
 
 Status: it runs and is **bit-exact** with host LiteRT's reference kernels
 (`det golden`). With hand-written PIE SIMD conv kernels and lookup-table elementwise ops
-an inference at 96×96 takes **0.66 s** on both cores (34 s on reference kernels only;
+an inference at 96×96 takes **0.48 s** on both cores (34 s on reference kernels only;
 137 s at the original 192×192).
 A result describes the frame grabbed when that inference started, so hold
 a hand still for ~2 s to be sure of catching a whole cycle. Stages,
 surgery, findings and profiles are in
 [docs/model-pipeline.md](docs/model-pipeline.md); how it got from 137 s to
-0.66 s is in [docs/performance.md](docs/performance.md).
+0.48 s is in [docs/performance.md](docs/performance.md).
 The `det` console command shows status and timing, and `det prof` gives
 per-op time.
 
