@@ -63,13 +63,17 @@ struct Layer {
 	int channels;
 };
 constexpr int kMaxLayers = 256;
-Layer layers[kMaxLayers];
+Layer *layers;  /* kMaxLayers, in PSRAM: 70 KB that internal RAM needs more */
 int n_layers;
 
 struct Stats { int layers, pie, fused, mismatches; int64_t us; } stats[N_OPS];
 
 Layer *find_layer(const TfLiteNode *node)
 {
+	if (!layers) {
+		layers = (Layer *)heap_caps_calloc(kMaxLayers, sizeof(Layer), MALLOC_CAP_SPIRAM);
+		if (!layers) return nullptr;
+	}
 	for (int i = 0; i < n_layers; i++)
 		if (layers[i].node == node) return &layers[i];
 	if (n_layers == kMaxLayers) return nullptr;

@@ -13,6 +13,9 @@
 #include "esp_timer.h"
 #include "img_converters.h"
 
+#include <new>
+
+#include "tensorflow/lite/micro/micro_allocator.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/micro/micro_profiler_interface.h"
@@ -35,6 +38,16 @@ static const char *TAG = "detector";
  * model peaks well above internal SRAM, so it goes to PSRAM. The real
  * need is logged after AllocateTensors() (det: "arena used"). */
 #define ARENA_SIZE (2 * 1024 * 1024)
+
+/* Activations in internal RAM (experiment, off): TFLM can keep its
+ * persistent data (tensor structs, op data) in one arena and the planned
+ * intermediate tensors in another. With DET_ACT_INTERNAL the second one
+ * goes to internal SRAM when it fits, leaving DET_INTERNAL_RESERVE for
+ * what is set up later (NimBLE, task stacks, the PIE scratch buffers);
+ * otherwise everything stays in the PSRAM arena. At 96x96 it doesn't fit
+ * (>= 216 KB peak vs a 168 KB largest block), see docs/performance.md. */
+#define DET_ACT_INTERNAL     0
+#define DET_INTERNAL_RESERVE (40 * 1024)
 
 /* Source frame as RGB888, QVGA max (decoded JPEG or unpacked RGB565). */
 #define SRC_MAX_W 320
@@ -129,6 +142,9 @@ static struct {
 	int above;                   /* anchors above threshold */
 	uint32_t t_grab, t_pre, t_infer, t_post; /* us */
 	size_t arena_used;
+	size_t act_size;               /* internal activation arena, 0 = PSRAM only */
+	size_t int_free_init;          /* internal RAM free before it */
+	size_t int_block_init, act_try;
 	char error[64];
 } st;
 
@@ -231,12 +247,39 @@ void detector_init(void)
 		return;
 	}
 
-	static tflite::MicroInterpreter interp(model, ops, arena, ARENA_SIZE, nullptr, &profiler);
-	if (interp.AllocateTensors() != kTfLiteOk) {
-		snprintf(st.error, sizeof(st.error), "AllocateTensors failed");
-		ESP_LOGE(TAG, "%s", st.error);
-		return;
+	alignas(tflite::MicroInterpreter) static uint8_t interp_mem[sizeof(tflite::MicroInterpreter)];
+	tflite::MicroInterpreter *ip = nullptr;
+	st.int_free_init = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+	st.int_block_init = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#if DET_ACT_INTERNAL
+	{
+		const size_t blk = st.int_block_init;
+		const size_t n = blk > DET_INTERNAL_RESERVE ? (blk - DET_INTERNAL_RESERVE) & ~(size_t)15 : 0;
+		st.act_try = n;
+		uint8_t *act = n >= 64 * 1024 ? (uint8_t *)heap_caps_aligned_alloc(16, n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : nullptr;
+		tflite::MicroAllocator *a = act ? tflite::MicroAllocator::Create(arena, ARENA_SIZE, act, n) : nullptr;
+		if (a) {
+			ip = new (interp_mem) tflite::MicroInterpreter(model, ops, a, nullptr, &profiler);
+			if (ip->AllocateTensors() == kTfLiteOk) {
+				st.act_size = n;
+			} else {
+				ESP_LOGW(TAG, "activations don't fit in %u KB of internal RAM, using PSRAM", (unsigned)(n / 1024));
+				ip->~MicroInterpreter();
+				ip = nullptr;
+			}
+		}
+		if (!st.act_size) heap_caps_free(act);
 	}
+#endif
+	if (!ip) {
+		ip = new (interp_mem) tflite::MicroInterpreter(model, ops, arena, ARENA_SIZE, nullptr, &profiler);
+		if (ip->AllocateTensors() != kTfLiteOk) {
+			snprintf(st.error, sizeof(st.error), "AllocateTensors failed");
+			ESP_LOGE(TAG, "%s", st.error);
+			return;
+		}
+	}
+	tflite::MicroInterpreter &interp = *ip;
 	interpreter = &interp;
 	st.arena_used = interp.arena_used_bytes();
 
@@ -635,6 +678,12 @@ static int cmd_det(int argc, char **argv)
 	if (!interpreter) return 0;
 	printf("model      %dx%d int8 input, %d anchors, arena %u KB used\n",
 	       res, res, n_anchors, (unsigned)(st.arena_used / 1024));
+	printf("memory     activations in %s", st.act_size ? "internal RAM" : "PSRAM");
+	if (st.act_size) printf(" (%u KB arena)", (unsigned)(st.act_size / 1024));
+	if (!st.act_size && st.act_try) printf(" (%u KB internal tried)", (unsigned)(st.act_try / 1024));
+	printf("; internal RAM free %u KB at init (largest block %u KB), %u KB now (largest block %u KB)\n",
+	       (unsigned)(st.int_free_init / 1024), (unsigned)(st.int_block_init / 1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+	       (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024));
 	printf("input q    scale %g zp %d\n", t_in->params.scale, (int)t_in->params.zero_point);
 	printf("frames     %lu (%lu with hand), threshold %.2f\n",
 	       (unsigned long)st.frames, (unsigned long)st.hits, threshold);

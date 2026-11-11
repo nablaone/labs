@@ -362,6 +362,47 @@ Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
 preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
 about every 0.87 s.
 
+## Tried: activations in internal RAM (not kept)
+
+Every intermediate tensor lives in PSRAM behind a 32 KB data cache, the
+only cache level, and both cores share the bus. Internal SRAM is a
+scratchpad: about one cycle per access, but nothing goes there unless we
+put it there. The idea: put TFLM's activation arena in internal SRAM.
+
+TFLM can split its memory: the persistent part (tensor structs, op data)
+in one arena, the planned intermediate tensors in another
+(`MicroAllocator::Create(persistent, n, non_persistent, m)`).
+`main/detector.cc` has this behind `DET_ACT_INTERNAL` (off). It uses
+internal RAM when the activations fit and falls back to PSRAM otherwise.
+`det` shows where they are and the free internal RAM.
+
+**At 96×96 the activations don't fit.** The peak is at least 216 KB:
+three 48×48×32 tensors live at once in the first blocks. Internal RAM
+has 260 KB free at init, but the largest contiguous block is 168 KB, and
+the arena must be contiguous.
+- Freeing RAM: `pie_elementwise.cc` kept a 256-entry layer table with a
+  256-byte LUT each (70 KB) in `.bss`. It is now allocated in PSRAM
+  (kept, no measurable cost). That raised the free RAM from 192 KB to
+  260 KB, but not the largest block enough.
+- Later in the network, the live set drops below 96 KB (from op ~33 on),
+  but TFLM plans one arena for the whole graph, so there's no way to put
+  only the late tensors in internal RAM.
+
+**64×64 model as a stand-in** (`make -C model ... RES=64`, same ops and
+weights, 30.9 M conv MACs instead of 69 M): the activations fit (171 KB
+arena in total, 128 KB internal). Inference took **278 ms** with
+activations in internal RAM. The comparison run with the same model in
+PSRAM was not done, so the gain is unknown. One confound to keep in
+mind: with the activations internal, only 39 KB of internal RAM is left,
+so the depthwise padded copy (the PIE scratch, 41 KB at 64×64) moves to
+PSRAM. The two placements compete for the same RAM.
+
+Conclusion for now: the full arena in SRAM doesn't fit at the resolution
+we run, and wouldn't fit together with the depthwise scratch even when
+it does. Keeping hot data in fast memory has to come from the kernels
+instead: tiling (a few rows at a time) and fusing DEPTHWISE into the
+following 1×1 conv, so the intermediate never leaves internal RAM.
+
 ## What's left
 
 Ordered by expected payoff:
@@ -372,8 +413,9 @@ Ordered by expected payoff:
    (`ee.vmulas.s8.accx.ld.ip`), several outputs per input load, the
    zero-overhead `loop`.
 3. **PSRAM traffic:** both cores share it (each runs ~40% slower when
-   both work). Small late-layer tensors in internal RAM, or the 64 KB
-   data cache.
+   both work). The whole arena in internal RAM doesn't fit (see above).
+   Options: row tiling and DEPTHWISE→1×1 fusion through internal RAM,
+   or the 64 KB data cache.
 
 ## Pitfalls hit along the way
 
