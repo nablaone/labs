@@ -1,7 +1,7 @@
 # Making the palm detector fast on the ESP32-S3
 
 How one inference of the OpenCV-zoo palm detector went from **137 s** to
-**0.48 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
+**0.36 s** on the FireBeetle 2 ESP32-S3 (240 MHz, octal PSRAM). It still
 uses upstream TensorFlow Lite Micro and no vendor ML libraries. The model
 pipeline itself is in [model-pipeline.md](model-pipeline.md).
 
@@ -66,10 +66,11 @@ Per-op profile at 96×96 (`det prof`):
 | + both CPU cores | 0.81 s | 1.28× |
 | + CONV→ADD→PRELU fusion | 0.78 s | 1.06× |
 | + own MAX_POOL / PAD / RESIZE | 0.66 s | 1.18× |
-| + depthwise rework | **0.48 s** | 1.39× |
+| + depthwise rework | 0.48 s | 1.39× |
+| + pointwise 1×1 rework | **0.36 s** | 1.33× |
 
-Overall: **71× faster than reference kernels at the same input size,
-288× faster than the starting point.**
+Overall: **95× faster than reference kernels at the same input size,
+383× faster than the starting point.**
 
 ### 1. Smaller input: 192 → 96
 
@@ -345,23 +346,24 @@ is smaller than the detector's. They are static now.
 
 ## Current status
 
-96×96, 0.48 s per inference (`det prof`, golden input):
+96×96, 0.36 s per inference (`det prof`, golden input):
 
 | op | ms | % | kernel |
 |---|---|---|---|
-| CONV_2D (30) | 340 | 71.6 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
-| DEPTHWISE_CONV_2D (23) | 73 | 15.4 | PIE, row ring in SRAM, 2 cores |
-| ADD (25: 4 unfused) | 30 | 6.4 | LUT + requant, 2 cores |
-| PRELU (26: 4 unfused) | 11 | 2.3 | LUT, 2 cores |
-| PAD (8) | 9.9 | 2.1 | own, 2 cores |
-| RESIZE_BILINEAR (2) | 7.0 | 1.5 | own, 2 cores |
-| MAX_POOL_2D (4) | 3.4 | 0.7 | PIE, 2 cores |
-| CONCAT, RESHAPE | 0.2 | 0.0 | reference |
-| **total** | **475** | | |
+| CONV_2D (30) | 222 | 62 | PIE pointwise + im2col + fused ADD/PRELU, 2 cores |
+| DEPTHWISE_CONV_2D (23) | 74 | 21 | PIE, row ring in SRAM, 2 cores |
+| ADD (25: 4 unfused) | 30 | 8.5 | LUT + requant, 2 cores |
+| PRELU (26: 4 unfused) | 11 | 3.0 | LUT, 2 cores |
+| PAD (8) | 9.9 | 2.8 | own, 2 cores |
+| RESIZE_BILINEAR (2) | 6.8 | 1.9 | own, 2 cores |
+| MAX_POOL_2D (4) | 3.4 | 1.0 | PIE, 2 cores |
+| CONCAT, RESHAPE | 0.3 | 0.0 | reference |
+| **total** | **357** | | |
 
-Around it: grabbing and decoding a QVGA JPEG takes 80–170 ms, the letterbox
-preprocessing 9 ms, and postprocessing 2 ms. A detection result arrives
-about every 0.56 s.
+Around it: grabbing a raw RGB565 160×120 frame takes ~3 ms (a JPEG
+QVGA frame took 80–170 ms with decoding, see step 12), the letterbox
+preprocessing 8 ms, and postprocessing 1.5 ms. A detection result
+arrives about every 0.37 s.
 
 ### 10. Depthwise rework (0.66 → 0.48 s)
 
@@ -415,6 +417,82 @@ Still bit-exact (golden). The output step is now ~25 instructions per
 value, mostly the exact requantization (64-bit multiply, two rounding
 shifts); maybe 10–15 ms more is in it.
 
+### 11. Pointwise 1×1 rework (0.48 → 0.36 s)
+
+Same method as depthwise: per-phase cycle counters first (`det pie
+stats`, "pointwise phases").
+
+| | cycles per output |
+|---|---|
+| output step, plain layers | ~70 |
+| output step, with ADD+PRELU fused | **140–230** |
+| dot product, 32 input channels | 50 (SIMD work ~6) |
+| dot product, 256 input channels | 290–500 (SIMD work ~48) |
+
+Fused layers were slower in *both* columns, also the dot product. The
+fused PRELU used a [256][C] lookup table: 64 KB at C = 256, read at
+scattered addresses, so it kept evicting the conv's weights from the
+32 KB data cache.
+
+Changes (`main/pie_conv.cc`):
+1. **PRELU by arithmetic in the fused step,** exactly TFLM's formula
+   (`v ≥ 0 ? MBQM(v, m1, s1) : MBQM(v·alpha[c], m2, s2)`). No table, no
+   cache pollution. The standalone PRELU kernel keeps its table.
+2. **Dot product as one asm loop:** zero-overhead `loopnez`, the next
+   weight vector loaded by the multiply itself
+   (`ee.vmulas.s8.accx.ld.ip`). For 32 and 64 input channels the pixel
+   stays in 2 or 4 vector registers across all output channels, so each
+   output costs only its weight loads, the multiplies and one store.
+3. **Output step out of line,** as in depthwise: a pixel's dot results go
+   to a small buffer, then a separate function requantizes them,
+   specialized per layer (plain / +ADD / +PRELU), with precomputed
+   branch-free requantization parameters and everything in locals (the
+   output is a `char*`, which otherwise forces reloads after every store).
+
+| | before | after |
+|---|---|---|
+| dot, 32 channels | 50 c/o | 14 c/o |
+| dot, 64 channels | 77 c/o | 21 c/o |
+| dot, 256 channels (36 px) | 320–350 c/o | ~160 c/o |
+| output step, fused | 140–230 c/o | ~115–135 c/o |
+| output step, plain | ~70 c/o | ~30 c/o |
+| **CONV_2D total** | **341 ms** | **222 ms** |
+| inference (golden) | 476 ms | **358 ms** |
+| live detector | 471 ms | **356 ms** |
+
+Tried and reverted: **splitting the output channels between the cores**
+for the few-pixel layers (6×6, 3×3), so each core streams only half the
+weights. It made them 2–3× *slower*. With a pixel split, both cores walk
+the same 16 KB weight block at the same time and share it in the cache;
+with a channel split, two different blocks plus the inputs don't fit.
+
+Still bit-exact (golden; verify mode per layer).
+
+### 12. Camera: RGB565 160×120 instead of JPEG 320×240 (cycle 453 → 374 ms)
+
+Not the inference itself, but the time to a result. The camera sent JPEG
+QVGA, which `esp_jpeg` decoded to RGB on the CPU: ~80 ms per frame, on
+the detector's core, before every inference. The detector already
+unpacks raw RGB565, and the model input is only 96×96, so a raw 160×120
+frame has more than enough pixels.
+
+| capture | grab + decode | preprocess | inference | cycle |
+|---|---|---|---|---|
+| JPEG 320×240 (before) | 83.5 ms | 9.2 ms | 358.6 ms | **453 ms** |
+| RGB565 320×240 | 13.5 ms | 9.8 ms | **390.9 ms** | 416 ms |
+| RGB565 160×120 (now) | **3.2 ms** | 7.9 ms | 361.5 ms | **374 ms** |
+
+Raw 320×240 shows a cost that's easy to miss: the camera DMA keeps
+writing 153 KB frames into PSRAM ~22 times a second (~3.4 MB/s), and
+that competes with the inference for the PSRAM bus (+32 ms). At 160×120
+the frames are a quarter of the size and the penalty is ~3 ms.
+
+The default is now RGB565 QQVGA (`main/camera.c`). `cam fmt jpeg` /
+`cam res qvga` (or the web page) switch back, e.g. for a nicer picture
+on the web page; the detector handles both. The raw formats show the
+sensor's horizontal row noise more than JPEG does (see
+[frame-grabbing.md](frame-grabbing.md)).
+
 ## Tried: activations in internal RAM (not kept)
 
 Every intermediate tensor lives in PSRAM behind a 32 KB data cache, the
@@ -460,17 +538,19 @@ following 1×1 conv, so the intermediate never leaves internal RAM.
 
 Ordered by expected payoff:
 
-1. **Pointwise 1×1 conv** (340 ms, 72%): likely the same story as
-   depthwise had: a scalar output step (requant + fused ADD/PRELU, one
-   value at a time) around a short dot product. Measure the phases first,
-   then: 16 output channels per QACC pass instead of one ACCX dot product
-   per output, fused load+multiply, output step out of line.
-2. **Depthwise output step** (40 cycles/output): a few more instructions
-   in the exact requantization; ~10–15 ms.
-3. **PSRAM traffic:** both cores share it (each runs ~40% slower when
-   both work). The whole arena in internal RAM doesn't fit (see above).
-   Options: row tiling and DEPTHWISE→1×1 fusion through internal RAM,
-   or the 64 KB data cache.
+1. **The fused output step** (~115–135 cycles per output, ~117 ms of the
+   222 ms CONV): three exact requantizations in a row (conv, ADD, PRELU)
+   with more live values than registers. Ideas: fewer parameters per
+   element (specialize shifts per layer), or a cheaper exact formulation.
+2. **The 4 unfused ADDs** (30 ms): blocked by the overlap check; a
+   different buffer layout or an out-of-place variant could fuse them.
+3. **Wide pointwise layers** (128/256 input channels): the pixel doesn't
+   fit in registers; ~160 c/o for 256 channels against ~40 of SIMD work.
+4. **Depthwise output step** (40 cycles/output): ~10–15 ms.
+5. **PSRAM traffic:** DEPTHWISE→1×1 fusion through internal RAM, or the
+   64 KB data cache.
+6. **Overlap capture with inference:** with raw frames the grab is ~3 ms,
+   so this is now worth little.
 
 ## Pitfalls hit along the way
 

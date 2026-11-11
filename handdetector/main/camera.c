@@ -22,10 +22,13 @@ static bool cam_ready;
 static SemaphoreHandle_t cam_lock;
 
 /*
- * JPEG QVGA to start with -- the OV2640 encodes JPEG in hardware, so it's
- * cheap and proves the full DVP pipeline works. Hand detection will
- * likely want a small RGB565/grayscale frame instead; switch with
- * `cam fmt` / `cam res` (or the web page) at runtime.
+ * RGB565 QQVGA (160x120) by default, for the palm detector: raw frames
+ * need no decode (JPEG QVGA cost ~80 ms of CPU per frame), and 160x120
+ * is still more than the 96x96 model input. QVGA RGB565 is worse: the
+ * camera DMA then writes ~3.4 MB/s into PSRAM, which slows the inference
+ * by ~30 ms. Measured in docs/performance.md (step 12). Switch with
+ * `cam fmt` / `cam res` (or the web page) at runtime, e.g. JPEG QVGA for
+ * a nicer picture on the web page.
  *
  * XCLK 20 MHz is the usual OV2640 value. Two frame buffers in PSRAM let
  * DMA fill one while the app reads the other; GRAB_LATEST drops stale
@@ -56,8 +59,8 @@ static camera_config_t cam_config = {
 	.ledc_timer = LEDC_TIMER_0,
 	.ledc_channel = LEDC_CHANNEL_0,
 
-	.pixel_format = PIXFORMAT_JPEG,
-	.frame_size = FRAMESIZE_QVGA,
+	.pixel_format = PIXFORMAT_RGB565,
+	.frame_size = FRAMESIZE_QQVGA,
 	.jpeg_quality = 12,
 	.fb_count = 2,
 	.fb_location = CAMERA_FB_IN_PSRAM,

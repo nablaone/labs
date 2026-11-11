@@ -123,6 +123,12 @@ row noise that grows with gain, so the firmware caps AGC at 2×. Timing
 tables, the noise investigation and the tools are in
 [docs/frame-grabbing.md](docs/frame-grabbing.md).
 
+The default mode is RGB565 160×120: the detector needs no JPEG decode
+(~80 ms per frame saved), and small raw frames keep the camera's DMA
+traffic from slowing the inference (step 12 in
+[docs/performance.md](docs/performance.md)). `cam fmt jpeg` + `cam res
+qvga` give a nicer picture on the web page.
+
 ## Palm detector
 
 The OpenCV zoo's MediaPipe palm detector, run with **upstream TFLM
@@ -141,13 +147,13 @@ make -C model flash-model  # model into its partition; no firmware rebuild neede
 
 Status: it runs and is **bit-exact** with host LiteRT's reference kernels
 (`det golden`). With hand-written PIE SIMD conv kernels and lookup-table elementwise ops
-an inference at 96×96 takes **0.48 s** on both cores (34 s on reference kernels only;
+an inference at 96×96 takes **0.36 s** on both cores (34 s on reference kernels only;
 137 s at the original 192×192).
 A result describes the frame grabbed when that inference started, so hold
 a hand still for ~2 s to be sure of catching a whole cycle. Stages,
 surgery, findings and profiles are in
 [docs/model-pipeline.md](docs/model-pipeline.md); how it got from 137 s to
-0.48 s is in [docs/performance.md](docs/performance.md).
+0.36 s is in [docs/performance.md](docs/performance.md).
 The `det` console command shows status and timing, and `det prof` gives
 per-op time.
 

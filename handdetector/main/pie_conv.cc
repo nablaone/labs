@@ -88,6 +88,9 @@ struct Layer {
 	uint32_t dw_mac_cyc[2], dw_out_cyc[2], dw_fill_cyc[2];
 	int dw_oh, dw_ow, dw_stride;
 	bool dw_scratch_ext;  /* padded rows landed in PSRAM */
+	/* pointwise phase profile, last inference (cycles, per core) */
+	uint32_t pw_dot_cyc[2], pw_out_cyc[2];
+	int pw_pixels;
 };
 constexpr int kMaxLayers = 64;
 Layer layers[kMaxLayers];
@@ -138,6 +141,53 @@ inline int32_t requant(int32_t acc, int32_t mult, int32_t shift, int32_t out_off
 	return acc < lo ? lo : acc > hi ? hi : acc;
 }
 
+/* Per-channel output parameters (depthwise and pointwise), precomputed so
+ * the output step is branch-free: pie_mbqm() split into a left shift, the rounding
+ * high multiply and a rounding right shift (half/nz encode rs == 0). */
+struct DwChan {
+	int32_t bias;   /* bias + input_offset * sum(w) */
+	int32_t mult;
+	int32_t half;   /* rs ? 1 << (rs - 1) : 0 */
+	uint8_t ls, rs, nz;
+};
+
+/* MultiplyByQuantizedMultiplier(x, m, shift) split like DwChan, for
+ * the fused ADD / PRELU steps: exact and branch-free. */
+struct Rq { int32_t m, half; uint8_t ls, rs, nz; };
+
+inline Rq make_rq(int32_t m, int shift)
+{
+	Rq r;
+	r.m = m;
+	r.ls = shift > 0 ? shift : 0;
+	r.rs = shift < 0 ? -shift : 0;
+	r.nz = r.rs != 0;
+	r.half = r.rs ? 1 << (r.rs - 1) : 0;
+	return r;
+}
+
+inline int32_t rq_apply(int32_t x, int32_t m, int32_t half, int ls, int rs, int32_t nz)
+{
+	const int32_t a = (int32_t)((uint32_t)x << ls);
+	const int32_t h = (int32_t)(((int64_t)a * m + (1 << 30)) >> 31);
+	return (h + half - (int32_t)(((uint32_t)h >> 31) & nz)) >> rs;
+}
+
+/* Signed 20-bit field in the low bits of u. */
+inline int32_t sx20(uint32_t u) { return (int32_t)(u << 12) >> 12; }
+
+/* Same result as requant(v, mult, shift, ...) with pie_mbqm.
+ * SIMPLE: ls == 0 and rs >= 1 for every channel (the usual case), so the
+ * rounding needs no masks. */
+template <bool SIMPLE>
+inline int32_t dw_rq(int32_t v, const DwChan &q)
+{
+	const int32_t a = SIMPLE ? v : (int32_t)((uint32_t)v << q.ls);
+	int32_t h = (int32_t)(((int64_t)a * q.mult + (1 << 30)) >> 31);
+	if (SIMPLE) return (h + q.half - (h < 0)) >> q.rs;
+	return (h + q.half - (int32_t)(((uint32_t)h >> 31) & q.nz)) >> q.rs;
+}
+
 /* ---- ACCX dot product (pointwise, im2col) ---- */
 
 /* 16*n int8 dot product. x and w 16-byte aligned. Sums stay far below
@@ -167,17 +217,29 @@ struct Epi {
 	const int32_t *rs, *rc;      /* ADD rescale tables, indexed by int8 value */
 	int32_t om, os, oo, lo, hi;  /* ADD output requantization */
 	bool add;
-	const int8_t *pt;            /* PRELU table [256][C], or null */
-	int C;
+	bool prelu;                  /* PRELU, TFLM's arithmetic (pie_fusion.h) */
+	int32_t p_in_off, p_out_off, p_m1, p_s1, p_m2, p_s2;
+	const int32_t *p_alpha;
+	Rq add_rq, p_rq1, p_rq2;     /* the same three requantizations, split */
 };
+
+inline int32_t epi_add(const Epi *e, int32_t c, int8_t skip)
+{
+	c = pie_mbqm(e->rs[skip] + e->rc[c], e->om, e->os) + e->oo;
+	return c < e->lo ? e->lo : c > e->hi ? e->hi : c;
+}
+
+inline int32_t epi_prelu(const Epi *e, int32_t c, int ch)
+{
+	const int32_t v = e->p_in_off + c;
+	c = (v >= 0 ? pie_mbqm(v, e->p_m1, e->p_s1) : pie_mbqm(v * e->p_alpha[ch], e->p_m2, e->p_s2)) + e->p_out_off;
+	return c < -128 ? -128 : c > 127 ? 127 : c;
+}
 
 inline int8_t epi_apply(const Epi *e, int32_t c, size_t idx, int ch)
 {
-	if (e->add) {
-		c = pie_mbqm(e->rs[e->skip[idx]] + e->rc[c], e->om, e->os) + e->oo;
-		c = c < e->lo ? e->lo : c > e->hi ? e->hi : c;
-	}
-	if (e->pt) c = e->pt[(c + 128) * e->C + ch];
+	if (e->add) c = epi_add(e, c, e->skip[idx]);
+	if (e->prelu) c = epi_prelu(e, c, ch);
 	return (int8_t)c;
 }
 
@@ -222,9 +284,12 @@ bool prepare_conv(Layer *L, Kind kind, const TfLiteEvalTensor *filter, const TfL
 	L->ic = filter->dims->data[3];
 	const int k = L->kh * L->kw * L->ic;
 	L->k16 = (k + 15) & ~15;
-	L->w = (int8_t *)heap_caps_aligned_alloc(16, (size_t)L->oc * L->k16, MALLOC_CAP_SPIRAM);
+	/* +16: the pointwise dot loop loads one weight vector past its row */
+	L->w = (int8_t *)heap_caps_aligned_alloc(16, (size_t)L->oc * L->k16 + 16, MALLOC_CAP_SPIRAM);
 	L->bias = (int32_t *)heap_caps_malloc(L->oc * sizeof(int32_t), MALLOC_CAP_SPIRAM);
-	if (!L->w || !L->bias) return false;
+	L->dwq = (DwChan *)heap_caps_malloc(L->oc * sizeof(DwChan), MALLOC_CAP_SPIRAM);
+	if (!L->w || !L->bias || !L->dwq) return false;
+	memset(L->w + (size_t)L->oc * L->k16, 0, 16);
 	const int32_t input_offset = -d.input_zero_point;
 	for (int o = 0; o < L->oc; o++) {
 		int8_t *row = L->w + (size_t)o * L->k16;
@@ -233,7 +298,17 @@ bool prepare_conv(Layer *L, Kind kind, const TfLiteEvalTensor *filter, const TfL
 		int32_t s = 0;
 		for (int i = 0; i < k; i++) s += row[i];
 		L->bias[o] = (bias ? bias->data.i32[o] : 0) + input_offset * s;
+		DwChan &q = L->dwq[o];
+		q.bias = L->bias[o];
+		q.mult = d.per_channel_output_multiplier[o];
+		const int sh = d.per_channel_output_shift[o];
+		q.ls = sh > 0 ? sh : 0;
+		q.rs = sh < 0 ? -sh : 0;
+		q.nz = q.rs != 0;
+		q.half = q.rs ? 1 << (q.rs - 1) : 0;
 	}
+	L->dw_simple = true;
+	for (int o = 0; o < L->oc; o++) L->dw_simple &= L->dwq[o].ls == 0 && L->dwq[o].rs >= 1;
 	(void)kind;
 	return true;
 }
@@ -247,37 +322,186 @@ bool prepare_conv(Layer *L, Kind kind, const TfLiteEvalTensor *filter, const TfL
  * pixel order. */
 constexpr size_t kWeightBlock = 16 * 1024;
 
+/* Dot product of 32*pairs int8 (x, w 16-byte aligned) in one asm block:
+ * zero-overhead loop, the next weight vector loaded by the multiply itself
+ * (EE.VMULAS.S8.ACCX.LD.IP). Reads one weight vector past the row. */
+inline int32_t dot_pairs(const int8_t *x, const int8_t *w, int pairs)
+{
+	int32_t r;
+	asm volatile(
+		"ee.zero.accx\n\t"
+		"ee.vld.128.ip q1, %[w], 16\n\t"
+		"loopnez %[n], 1f\n\t"
+		"ee.vld.128.ip q0, %[x], 16\n\t"
+		"ee.vmulas.s8.accx.ld.ip q2, %[w], 16, q0, q1\n\t"
+		"ee.vld.128.ip q0, %[x], 16\n\t"
+		"ee.vmulas.s8.accx.ld.ip q1, %[w], 16, q0, q2\n\t"
+		"1:\n\t"
+		"rur.accx_0 %[r]\n\t"
+		: [r] "=a"(r), [x] "+a"(x), [w] "+a"(w), [n] "+a"(pairs)
+		:
+		: "memory");
+	return r;
+}
+
+/* n dot products of one 32-channel pixel (kept in q0, q1) with n
+ * consecutive weight rows, into acc[0..n). */
+inline void dot_block_32(const int8_t *x, const int8_t *w, int n, int32_t *acc)
+{
+	int32_t t;
+	asm volatile(
+		"ee.vld.128.ip q0, %[x], 16\n\t"
+		"ee.vld.128.ip q1, %[x], 16\n\t"
+		"loopnez %[n], 1f\n\t"
+		"ee.vld.128.ip q2, %[w], 16\n\t"
+		"ee.vld.128.ip q3, %[w], 16\n\t"
+		"ee.zero.accx\n\t"
+		"ee.vmulas.s8.accx q0, q2\n\t"
+		"ee.vmulas.s8.accx q1, q3\n\t"
+		"rur.accx_0 %[t]\n\t"
+		"s32i %[t], %[a], 0\n\t"
+		"addi %[a], %[a], 4\n\t"
+		"1:\n\t"
+		: [x] "+a"(x), [w] "+a"(w), [n] "+a"(n), [a] "+a"(acc), [t] "=&a"(t)
+		:
+		: "memory");
+}
+
+/* Same for a 64-channel pixel (q0..q3). */
+inline void dot_block_64(const int8_t *x, const int8_t *w, int n, int32_t *acc)
+{
+	int32_t t;
+	asm volatile(
+		"ee.vld.128.ip q0, %[x], 16\n\t"
+		"ee.vld.128.ip q1, %[x], 16\n\t"
+		"ee.vld.128.ip q2, %[x], 16\n\t"
+		"ee.vld.128.ip q3, %[x], 16\n\t"
+		"loopnez %[n], 1f\n\t"
+		"ee.vld.128.ip q4, %[w], 16\n\t"
+		"ee.vld.128.ip q5, %[w], 16\n\t"
+		"ee.zero.accx\n\t"
+		"ee.vmulas.s8.accx q0, q4\n\t"
+		"ee.vld.128.ip q6, %[w], 16\n\t"
+		"ee.vmulas.s8.accx q1, q5\n\t"
+		"ee.vld.128.ip q7, %[w], 16\n\t"
+		"ee.vmulas.s8.accx q2, q6\n\t"
+		"ee.vmulas.s8.accx q3, q7\n\t"
+		"rur.accx_0 %[t]\n\t"
+		"s32i %[t], %[a], 0\n\t"
+		"addi %[a], %[a], 4\n\t"
+		"1:\n\t"
+		: [x] "+a"(x), [w] "+a"(w), [n] "+a"(n), [a] "+a"(acc), [t] "=&a"(t)
+		:
+		: "memory");
+}
+
+/* Output step for n outputs of one pixel: requantize, then the fused ADD
+ * and/or PRELU. Out of line so its registers don't compete with the dot
+ * loop's (as in depthwise). */
+template <bool SIMPLE, bool ADD, bool PRELU>
+__attribute__((noinline)) void pw_out(const int32_t *__restrict acc, const DwChan *__restrict q, int n,
+				      int8_t *__restrict y, const int8_t *__restrict skip, int ch0, const Epi *e,
+				      int32_t off, int32_t lo, int32_t hi)
+{
+	/* everything the loop needs in locals: y is a char pointer, so without
+	 * this every store would force the parameters to be reloaded */
+	const int32_t *__restrict rs = ADD ? e->rs : nullptr, *__restrict rc = ADD ? e->rc : nullptr;
+	const int32_t am = ADD ? e->add_rq.m : 0, ahalf = ADD ? e->add_rq.half : 0;
+	const int als = ADD ? e->add_rq.ls : 0, ars = ADD ? e->add_rq.rs : 0;
+	const int32_t anz = ADD ? e->add_rq.nz : 0;
+	const int32_t aoo = ADD ? e->oo : 0, alo = ADD ? e->lo : 0, ahi = ADD ? e->hi : 0;
+	const int32_t *__restrict alpha = PRELU ? e->p_alpha + ch0 : nullptr;
+	const int32_t pin = PRELU ? e->p_in_off : 0, pout = PRELU ? e->p_out_off : 0;
+	const Rq r1 = PRELU ? e->p_rq1 : Rq{}, r2 = PRELU ? e->p_rq2 : Rq{};
+	for (int i = 0; i < n; i++) {
+		int32_t c = dw_rq<SIMPLE>(acc[i] + q[i].bias, q[i]) + off;
+		c = c < lo ? lo : c;
+		c = c > hi ? hi : c;
+		if (ADD) {
+			c = rq_apply(rs[skip[i]] + rc[c], am, ahalf, als, ars, anz) + aoo;
+			c = c < alo ? alo : c;
+			c = c > ahi ? ahi : c;
+		}
+		if (PRELU) {
+			const int32_t v = pin + c;
+			const bool pos = v >= 0;
+			const int32_t x = pos ? v : v * alpha[i];
+			c = rq_apply(x, pos ? r1.m : r2.m, pos ? r1.half : r2.half, pos ? r1.ls : r2.ls,
+				     pos ? r1.rs : r2.rs, pos ? r1.nz : r2.nz) + pout;
+			c = c < -128 ? -128 : c;
+			c = c > 127 ? 127 : c;
+		}
+		y[i] = (int8_t)c;
+	}
+}
+
+typedef void (*pw_out_fn)(const int32_t *, const DwChan *, int, int8_t *, const int8_t *, int, const Epi *,
+			  int32_t, int32_t, int32_t);
+
+template <bool SIMPLE>
+pw_out_fn pick_out(bool add, bool prelu)
+{
+	if (add) return prelu ? pw_out<SIMPLE, true, true> : pw_out<SIMPLE, true, false>;
+	return prelu ? pw_out<SIMPLE, false, true> : pw_out<SIMPLE, false, false>;
+}
+
 void pointwise_range(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int p0, int p1,
-		     const Epi *e)
+		     int ch0, int ch1, const Epi *e)
 {
 	const int ic = L->ic, oc = L->oc, n16 = ic / 16;
 	int block = (int)(kWeightBlock / ic);
 	if (block < 1) block = 1;
-	if (block >= oc) {
-		for (int p = p0; p < p1; p++)
-			dot_all(L, d, in + (size_t)p * ic, n16, out + (size_t)p * oc, e, (size_t)p * oc);
-		return;
-	}
+	if (block > oc) block = oc;
 	const int32_t out_off = d.output_zero_point, lo = d.output_activation_min, hi = d.output_activation_max;
-	const int32_t *mult = d.per_channel_output_multiplier, *shift = d.per_channel_output_shift;
-	for (int o0 = 0; o0 < oc; o0 += block) {
-		const int o1 = o0 + block < oc ? o0 + block : oc;
-		const int8_t *x = in + (size_t)p0 * ic;
-		int8_t *y = out + (size_t)p0 * oc;
-		for (int p = p0; p < p1; p++, x += ic, y += oc) {
-			const int8_t *w = L->w + (size_t)o0 * ic;
-			for (int o = o0; o < o1; o++, w += ic) {
-				int32_t c = requant(dot_s8(x, w, n16) + L->bias[o], mult[o], shift[o], out_off, lo, hi);
-				y[o] = e ? epi_apply(e, c, (size_t)p * oc + o, o) : (int8_t)c;
+	const bool add = e && e->add, prelu = e && e->prelu;
+	const pw_out_fn emit = L->dw_simple ? pick_out<true>(add, prelu) : pick_out<false>(add, prelu);
+	const DwChan *chan = L->dwq;
+	const int8_t *wts = L->w;
+	const int8_t *skip = add ? e->skip : nullptr;
+	const bool even = (n16 & 1) == 0;
+	int32_t acc[256];
+	uint32_t dot_cyc = 0, out_cyc = 0;
+	for (int o0 = ch0; o0 < ch1; o0 += block) {
+		const int o1 = o0 + block < ch1 ? o0 + block : ch1;
+		for (int p = p0; p < p1; p++) {
+			const int8_t *x = in + (size_t)p * ic;
+			for (int a0 = o0; a0 < o1; a0 += 256) {
+				const int a1 = a0 + 256 < o1 ? a0 + 256 : o1;
+				const uint32_t c0 = esp_cpu_get_cycle_count();
+				const int8_t *w = wts + (size_t)a0 * ic;
+				if (ic == 32)
+					dot_block_32(x, w, a1 - a0, acc);
+				else if (ic == 64)
+					dot_block_64(x, w, a1 - a0, acc);
+				else if (even)
+					for (int o = a0; o < a1; o++, w += ic) acc[o - a0] = dot_pairs(x, w, n16 / 2);
+				else
+					for (int o = a0; o < a1; o++, w += ic) acc[o - a0] = dot_s8(x, w, n16);
+				const uint32_t c1 = esp_cpu_get_cycle_count();
+				const size_t idx = (size_t)p * oc + a0;
+				emit(acc, chan + a0, a1 - a0, out + idx, skip ? skip + idx : nullptr, a0, e, out_off, lo, hi);
+				out_cyc += esp_cpu_get_cycle_count() - c1;
+				dot_cyc += c1 - c0;
 			}
 		}
 	}
+	Layer *ML = const_cast<Layer *>(L);
+	const int core = xPortGetCoreID();
+	ML->pw_dot_cyc[core] += dot_cyc;
+	ML->pw_out_cyc[core] += out_cyc;
 }
 
 void conv_pointwise(const Layer *L, const micro::OpDataConv &d, const int8_t *in, int8_t *out, int pixels,
 		    const Epi *e)
 {
-	pie_parallel_for(pixels, [&](int p0, int p1) { pointwise_range(L, d, in, out, p0, p1, e); });
+	Layer *ML = const_cast<Layer *>(L);
+	ML->pw_dot_cyc[0] = ML->pw_dot_cyc[1] = ML->pw_out_cyc[0] = ML->pw_out_cyc[1] = 0;
+	ML->pw_pixels = pixels;
+	/* Split by pixels, not output channels: both cores then walk the same
+	 * weight block at the same time and share it in the cache. (Splitting
+	 * the channels made the 6x6/3x3 layers 2-3x slower: two different
+	 * 16 KB blocks plus the inputs don't fit the 32 KB cache.) */
+	pie_parallel_for(pixels, [&](int p0, int p1) { pointwise_range(L, d, in, out, p0, p1, 0, L->oc, e); });
 }
 
 bool conv_im2col(const Layer *L, const TfLiteConvParams &p, const micro::OpDataConv &d,
@@ -330,16 +554,6 @@ bool dw_eligible(const TfLiteDepthwiseConvParams &p, const TfLiteEvalTensor *in,
 	return true;
 }
 
-/* Per-channel output parameters for depthwise, precomputed so the output
- * step is branch-free: pie_mbqm() split into a left shift, the rounding
- * high multiply and a rounding right shift (half/nz encode rs == 0). */
-struct DwChan {
-	int32_t bias;   /* bias + input_offset * sum(w) */
-	int32_t mult;
-	int32_t half;   /* rs ? 1 << (rs - 1) : 0 */
-	uint8_t ls, rs, nz;
-};
-
 bool prepare_dw(Layer *L, const TfLiteEvalTensor *filter, const TfLiteEvalTensor *bias,
 		const micro::OpDataConv &d)
 {
@@ -372,21 +586,6 @@ bool prepare_dw(Layer *L, const TfLiteEvalTensor *filter, const TfLiteEvalTensor
 	L->dw_simple = true;
 	for (int c = 0; c < C; c++) L->dw_simple &= L->dwq[c].ls == 0 && L->dwq[c].rs >= 1;
 	return true;
-}
-
-/* Signed 20-bit field in the low bits of u. */
-inline int32_t sx20(uint32_t u) { return (int32_t)(u << 12) >> 12; }
-
-/* Same result as requant(v, mult, shift, ...) with pie_mbqm.
- * SIMPLE: ls == 0 and rs >= 1 for every channel (the usual case), so the
- * rounding needs no masks. */
-template <bool SIMPLE>
-inline int32_t dw_rq(int32_t v, const DwChan &q)
-{
-	const int32_t a = SIMPLE ? v : (int32_t)((uint32_t)v << q.ls);
-	int32_t h = (int32_t)(((int64_t)a * q.mult + (1 << 30)) >> 31);
-	if (SIMPLE) return (h + q.half - (h < 0)) >> q.rs;
-	return (h + q.half - (int32_t)(((uint32_t)h >> 31) & q.nz)) >> q.rs;
 }
 
 /*
@@ -587,7 +786,7 @@ TfLiteStatus ConvEval(TfLiteContext *ctx, TfLiteNode *node)
 	Kind kind = enabled && L ? conv_kind(params, in, filter, out) : REF;
 	if (kind != REF && !L->prepared) {
 		L->prepared = true;
-		if (!prepare_conv(L, kind, filter, bias, data)) { heap_caps_free(L->w); L->w = nullptr; }
+		if (!prepare_conv(L, kind, filter, bias, data)) { heap_caps_free(L->w); L->w = nullptr; heap_caps_free(L->dwq); L->dwq = nullptr; }
 	}
 	if (kind != REF && !L->w) kind = REF;
 
@@ -612,8 +811,13 @@ TfLiteStatus ConvEval(TfLiteContext *ctx, TfLiteNode *node)
 			epi.rc = F->r_conv + 128;
 			epi.om = F->om; epi.os = F->os; epi.oo = F->oo; epi.lo = F->lo; epi.hi = F->hi;
 			epi.add = F->add;
-			epi.pt = F->prelu ? F->prelu_t : nullptr;
-			epi.C = F->C;
+			epi.prelu = F->prelu;
+			epi.p_in_off = F->p_in_off; epi.p_out_off = F->p_out_off;
+			epi.p_m1 = F->p_m1; epi.p_s1 = F->p_s1; epi.p_m2 = F->p_m2; epi.p_s2 = F->p_s2;
+			epi.p_alpha = F->p_alpha;
+			epi.add_rq = make_rq(F->om, F->os);
+			epi.p_rq1 = make_rq(F->p_m1, F->p_s1);
+			epi.p_rq2 = make_rq(F->p_m2, F->p_s2);
 			ep = &epi;
 			dst = fin->data.int8;
 		}
@@ -798,6 +1002,22 @@ extern "C" void pie_print_stats(void)
 		       mac / n, o / n, L.dw_scratch_ext ? "PSRAM" : "internal");
 		t_fill += fl; t_mac += mac; t_out += o; n_out += n;
 	}
+	printf("\npointwise phases (cycles per output, both cores summed):\n");
+	printf("%-3s %-16s %8s %8s %8s %s\n", "#", "shape", "ms", "dot c/o", "out c/o", "");
+	double p_dot = 0, p_out = 0, p_n = 0;
+	for (int i = 0; i < n_layers; i++) {
+		const Layer &L = layers[i];
+		if (L.kind != POINTWISE) continue;
+		const double n = (double)L.pw_pixels * L.oc;
+		const double dt = (double)L.pw_dot_cyc[0] + L.pw_dot_cyc[1], o = (double)L.pw_out_cyc[0] + L.pw_out_cyc[1];
+		char sh[32];
+		snprintf(sh, sizeof(sh), "%dpx %d->%d", L.pw_pixels, L.ic, L.oc);
+		printf("%-3d %-16s %8.2f %8.1f %8.1f%s\n", i, sh, L.us / 1e3, dt / n, o / n, L.fused ? " +fused" : "");
+		p_dot += dt; p_out += o; p_n += n;
+	}
+	if (p_n > 0)
+		printf("all pointwise (core time, both cores): dot %.1f c/o %.1f ms, output step %.1f c/o %.1f ms\n",
+		       p_dot / p_n, p_dot / 240e3, p_out / p_n, p_out / 240e3);
 	if (n_out > 0)
 		printf("all (core time, both cores): row fill %.1f c/o %.1f ms, MAC %.1f c/o %.1f ms, output step %.1f c/o %.1f ms\n",
 		       t_fill / n_out, t_fill / 240e3, t_mac / n_out, t_mac / 240e3, t_out / n_out, t_out / 240e3);

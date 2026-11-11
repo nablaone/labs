@@ -40,6 +40,7 @@
 #include "tensorflow/lite/micro/kernels/mul.h"
 #include "tensorflow/lite/micro/kernels/sub.h"
 #include "tensorflow/lite/micro/kernels/internal/common.h"
+#include "tensorflow/lite/micro/kernels/internal/types.h"
 
 #include "pie_kernels.h"
 #include "pie_parallel.h"
@@ -319,10 +320,19 @@ bool eval_prelu(Layer *L, TfLiteContext *ctx, TfLiteNode *node)
 			if (F && F->add) F = nullptr;
 		}
 		if (F && !F->prelu && pie_fusion_consumers(in_t) == 1) {
-			F->prelu_out = node->outputs->data[0];
-			F->prelu_t = L->mul_lut;
-			F->C = C;
-			F->prelu = true;
+			const auto &pp = *static_cast<const tflite::micro::PreluParams *>(node->user_data);
+			heap_caps_free(F->p_alpha);
+			F->p_alpha = (int32_t *)heap_caps_malloc(C * sizeof(int32_t), MALLOC_CAP_SPIRAM);
+			if (F->p_alpha) {
+				for (int c = 0; c < C; c++) F->p_alpha[c] = pp.alpha_offset + alpha->data.int8[c];
+				F->p_in_off = pp.input_offset;
+				F->p_out_off = pp.output_offset;
+				F->p_m1 = pp.output_multiplier_1; F->p_s1 = pp.output_shift_1;
+				F->p_m2 = pp.output_multiplier_2; F->p_s2 = pp.output_shift_2;
+				F->prelu_out = node->outputs->data[0];
+				F->C = C;
+				F->prelu = true;
+			}
 		}
 	}
 	const int8_t *x = in->data.int8;

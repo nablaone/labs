@@ -12,7 +12,7 @@
  *
  *   c   = requant(conv accumulator)                 -- what CONV would store
  *   a   = requant(r_skip[skip] + r_conv[c])         -- what ADD would store
- *   out = prelu_table[a][channel]                   -- what PRELU would store
+ *   out = prelu(a, channel)                         -- what PRELU would store
  *
  * and writes only `out`, so the result is bit-exact with the unfused ops.
  *
@@ -44,11 +44,17 @@ struct PieFused {
 	int32_t r_skip[256];     /* per-input rescale tables, index v + 128 */
 	int32_t r_conv[256];
 	int32_t om, os, oo, lo, hi;
-	/* PRELU step */
+	/* PRELU step, TFLM's arithmetic (no table: a [256][C] table is up to
+	 * 64 KB of scattered reads, which evicts the conv's weights from the
+	 * 32 KB data cache):
+	 *   v = p_in_off + x
+	 *   y = v >= 0 ? MBQM(v, p_m1, p_s1) : MBQM(v * p_alpha[c], p_m2, p_s2)
+	 *   y = clamp(y + p_out_off, -128, 127) */
 	bool prelu;
 	int prelu_out;
-	const int8_t *prelu_t;   /* [256][C] table, owned by the PRELU kernel */
 	int C;
+	int32_t p_in_off, p_out_off, p_m1, p_s1, p_m2, p_s2;
+	int32_t *p_alpha;        /* alpha[c] + alpha_offset, C entries */
 	/* this inference: the conv already produced the final tensor */
 	bool pending;
 };

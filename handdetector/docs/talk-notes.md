@@ -21,7 +21,7 @@ as an estimate. Details live in [performance.md](performance.md) and
 
 ---
 
-## 2. Result: 137 s → 0.48 s
+## 2. Result: 137 s → 0.36 s
 
 | step | inference | gain |
 |---|---|---|
@@ -35,9 +35,10 @@ as an estimate. Details live in [performance.md](performance.md) and
 | both CPU cores | 0.81 s | 1.28× |
 | CONV→ADD→PRELU fusion | 0.78 s | 1.06× |
 | own MAX_POOL / PAD / RESIZE kernels | 0.66 s | 1.18× |
-| depthwise rework (measured first) | **0.48 s** | 1.39× |
+| depthwise rework (measured first) | 0.48 s | 1.39× |
+| pointwise 1×1 rework (measured first) | **0.36 s** | 1.33× |
 
-**288× overall, 71× at the same input size, still bit-exact.**
+**383× overall, 95× at the same input size, still bit-exact.**
 
 ---
 
@@ -73,20 +74,19 @@ trade accuracy for speed and must be measured.
 
 ---
 
-## 5. Where the time goes now (0.48 s)
+## 5. Where the time goes now (0.36 s)
 
 | op | ms | % |
 |---|---|---|
-| CONV_2D (mostly 1×1, with fused ADD/PRELU) | 340 | 72 |
-| DEPTHWISE_CONV_2D 5×5 | 73 | 15 |
-| ADD (unfused rest) | 30 | 6 |
-| PRELU (unfused rest) | 11 | 2 |
-| PAD | 9.9 | 2 |
-| RESIZE_BILINEAR | 7.0 | 1.5 |
-| MAX_POOL_2D | 3.4 | 0.7 |
+| CONV_2D (mostly 1×1, with fused ADD/PRELU) | 222 | 62 |
+| DEPTHWISE_CONV_2D 5×5 | 74 | 21 |
+| ADD (unfused rest) | 30 | 8.5 |
+| PRELU (unfused rest) | 11 | 3 |
+| PAD | 9.9 | 2.8 |
+| RESIZE_BILINEAR | 6.8 | 1.9 |
+| MAX_POOL_2D | 3.4 | 1.0 |
 
-Every op with real cost runs on our own code. The 1×1 conv is now
-the one big target.
+Every op with real cost runs on our own code.
 
 ---
 
@@ -120,11 +120,11 @@ depthwise outputs, ~6.2 MB activation traffic + 0.9 MB weights.
 | pure arithmetic (16 int8 MACs/cycle × 2 cores) | ~9 ms |
 | memory (PSRAM ~55 MB/s) | ~100–130 ms |
 | before the depthwise rework | 660 ms |
-| **now** | **476 ms** |
+| **now** | **358 ms** |
 
 - Measured before the rework: **~250 CPU cycles per output** in both conv
-  kernels, against ~5–10 cycles of useful SIMD work. Depthwise is now
-  ~65 cycles per output; the 1×1 conv is still ~250.
+  kernels, against ~5–10 cycles of useful SIMD work. Now: depthwise ~65,
+  1×1 conv ~150 (most of it the fused ADD+PRELU output step).
 - Estimate: 2–3× more is realistic (≈ 200–300 ms) with better kernels;
   ~150–200 ms with depthwise→1×1 fusion through SRAM.
 
@@ -205,9 +205,12 @@ kernels (tiling, fusion), not from moving the whole arena.
 - Exact without training only for dead, constant or duplicate channels;
   how many exist here is unmeasured.
 
-**JPEG vs raw camera frames**
-- JPEG grab 20 ms + ~60 ms CPU decode; raw RGB565/gray 40 ms by DMA, no
-  decode. A cheap system-level win.
+**JPEG vs raw camera frames** (done, step 12 in performance.md)
+- JPEG 320×240 cost ~80 ms of CPU decode per frame. Raw RGB565 160×120:
+  ~3 ms, no decode; a result every 374 ms instead of 453.
+- Surprise: raw 320×240 made the *inference* 32 ms slower. The camera
+  DMA writes 3.4 MB/s into PSRAM and competes with the model for the bus.
+  Smaller frames fixed that too.
 
 ---
 
@@ -234,7 +237,29 @@ it was. Fixing it: 0.66 → 0.48 s, still bit-exact.
 
 ---
 
-## 13. Pitfalls worth telling
+## 13. 1×1 conv: a lookup table that poisoned the cache
+
+Same method: phase counters first.
+
+- Fused layers were slow in *both* phases, also the dot product. The
+  fused PRELU used a [256 values][256 channels] table: **64 KB of
+  scattered reads in a 32 KB cache**, evicting the weights.
+- Fix: compute PRELU with TFLM's exact formula instead (one requantize).
+  A table is only cheap while it fits in the cache.
+- Pixels with 32 or 64 channels now stay **in vector registers** across
+  all output channels: 50 → 14 cycles per output.
+- Tried and reverted: splitting output channels between the cores. 2–3×
+  *slower*: with a pixel split both cores share one weight block in the
+  cache; with a channel split they each need their own.
+
+| | before | after |
+|---|---|---|
+| CONV_2D | 341 ms | 222 ms |
+| inference | 476 ms | **358 ms** |
+
+---
+
+## 14. Pitfalls worth telling
 
 - **Bit-exact means matching the reference's rounding exactly:** TFLM's
   requantization is double-rounding, and our 10-cycle replacement had to
@@ -252,12 +277,12 @@ it was. Fixing it: 0.66 → 0.48 s, still bit-exact.
 
 ---
 
-## 14. Next steps
+## 15. Next steps
 
-1. **1×1 conv** (340 ms, 72%): same method. Measure phases first;
-   likely a scalar output step (requant + fused ADD/PRELU per value)
-   around a short dot product. Then: 16 output channels per QACC pass,
-   fused load+multiply, output step out of line.
+1. **Fused output step** (~120 cycles per output, half of CONV's time):
+   three exact requantizations in a row.
 2. **Depthwise→1×1 fusion** in row tiles through internal RAM.
-3. **System:** RGB565 instead of JPEG; overlap grab with inference.
-   Today a result arrives every ~0.56 s.
+3. **Beyond bit-exact:** SIMD requantization with PIE's own rounding,
+   validated on real frames; or a smaller input / slimmer model.
+   Today a result arrives every ~0.37 s (inference 0.36 s + capture 3 ms
+   + preprocessing 8 ms).
