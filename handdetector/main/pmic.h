@@ -8,5 +8,10 @@
  * without it the sensor is unpowered and SCCB probing finds nothing. */
 esp_err_t pmic_camera_power_on(void);
 
-/* "i2cscan" CLI command -- lists devices on the shared bus. */
+/* Sets one camera rail in mV (ALDO1 = DVDD, DLDO1 = AVDD/DOVDD), kept
+ * inside the OV2640's ratings: DVDD 1100..1400, AVDD 2500..3000. */
+esp_err_t pmic_set_rail(const char *rail, int mv);
+
+/* "i2cscan" CLI command -- lists devices on the shared bus -- plus "pmic"
+ * (AXP313A register dump / rail voltage). */
 void pmic_register_cli_commands(void);

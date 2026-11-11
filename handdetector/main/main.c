@@ -10,6 +10,7 @@
 #include "heartbeat_task.h"
 #include "pmic.h"
 #include "camera.h"
+#include "ble_link.h"
 
 static const char *TAG = "main";
 
@@ -38,8 +39,11 @@ void app_main(void)
 	pmic_register_cli_commands();
 	camera_register_cli_commands();
 	camera_init();
+	ble_link_init();
+	ble_link_register_cli_commands();
 
 	xTaskCreate(heartbeat_task, "heartbeat", 2048, NULL, 5, NULL);
+	xTaskCreate(ble_link_task, "ble_link", 4096, NULL, 5, NULL);
 	xTaskCreate(console_task, "console", 4096, NULL, 5, NULL);
 
 	ESP_LOGI(TAG, "handdetector %s up -- press Enter for the CLI", FIRMWARE_VERSION);

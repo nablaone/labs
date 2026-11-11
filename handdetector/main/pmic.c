@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -93,6 +95,59 @@ esp_err_t pmic_camera_power_on(void)
 	return err;
 }
 
+static i2c_master_dev_handle_t axp_dev(void)
+{
+	static i2c_master_dev_handle_t dev;
+	if (!dev && bus_open() == ESP_OK) {
+		const i2c_device_config_t cfg = {
+			.dev_addr_length = I2C_ADDR_BIT_LEN_7,
+			.device_address = AXP313A_ADDR,
+			.scl_speed_hz = 100000,
+		};
+		if (i2c_master_bus_add_device(bus, &cfg, &dev) != ESP_OK) dev = NULL;
+	}
+	return dev;
+}
+
+static int axp_read(uint8_t reg)
+{
+	uint8_t v;
+	i2c_master_dev_handle_t dev = axp_dev();
+	if (!dev || i2c_master_transmit_receive(dev, &reg, 1, &v, 1, 100) != ESP_OK) return -1;
+	return v;
+}
+
+esp_err_t pmic_set_rail(const char *rail, int mv)
+{
+	uint8_t reg;
+	if (strcmp(rail, "aldo") == 0 && mv >= 1100 && mv <= 1400) reg = AXP_REG_ALDO1_V;
+	else if (strcmp(rail, "dldo") == 0 && mv >= 2500 && mv <= 3000) reg = AXP_REG_DLDO1_V;
+	else return ESP_ERR_INVALID_ARG;
+	i2c_master_dev_handle_t dev = axp_dev();
+	return dev ? axp_write(dev, reg, AXP_MV(mv)) : ESP_FAIL;
+}
+
+/* pmic                 dump registers 0x00..0x20
+ * pmic aldo|dldo <mV>  set a camera rail */
+static int cmd_pmic(int argc, char **argv)
+{
+	if (argc >= 3) {
+		esp_err_t err = pmic_set_rail(argv[1], atoi(argv[2]));
+		printf("%s\n", esp_err_to_name(err));
+		if (err != ESP_OK) printf("aldo 1100..1400 mV (DVDD), dldo 2500..3000 mV (AVDD/DOVDD)\n");
+		return err != ESP_OK;
+	}
+	for (int r = 0; r <= 0x20; r++) {
+		int v = axp_read(r);
+		if (v < 0) { printf("read 0x%02x failed\n", r); return 1; }
+		printf("%02x:%02x%s", r, v, (r % 8 == 7) ? "\n" : "  ");
+	}
+	int a = axp_read(AXP_REG_ALDO1_V), d = axp_read(AXP_REG_DLDO1_V);
+	printf("\noutputs 0x%02x, ALDO1 %d mV, DLDO1 %d mV\n", axp_read(AXP_REG_OUTPUT_CTRL),
+	       500 + (a & 0x1f) * 100, 500 + (d & 0x1f) * 100);
+	return 0;
+}
+
 static int cmd_i2cscan(int argc, char **argv)
 {
 	esp_err_t err = bus_open();
@@ -120,4 +175,11 @@ void pmic_register_cli_commands(void)
 		.func = &cmd_i2cscan,
 	};
 	ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+
+	const esp_console_cmd_t pmic_cmd = {
+		.command = "pmic",
+		.help = "AXP313A: dump registers, or 'pmic aldo|dldo <mV>' to set a camera rail",
+		.func = &cmd_pmic,
+	};
+	ESP_ERROR_CHECK(esp_console_cmd_register(&pmic_cmd));
 }

@@ -15,6 +15,10 @@ added on top.
   and esp32-camera borrows it (`pin_sccb_sda = -1`), which needs ESP-IDF
   >= 5.4 (older IDF makes esp32-camera use the legacy I2C driver, which
   aborts when mixed with `i2c_master`).
+- Images leave the board over BLE (`main/ble_link.c`, protocol in
+  `ble_link.h`) to `web/index.html` (Web Bluetooth, `make web`). Add new
+  diagnostics as text commands there. All camera access goes through
+  `camera_grab()`/`camera_release()` (mutex) so mode changes are safe.
 - Build in Docker (`make build`). Flash and monitor natively (`make flash`,
   `make monitor`).
 - One `.c/.h` per module: `xxx_init()`, `xxx_task()`,

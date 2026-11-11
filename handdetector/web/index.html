@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HandDetector Diagnostics</title>
+<!--
+  Diagnostic page for the handdetector firmware, over Bluetooth Low Energy
+  (Web Bluetooth -- Chrome/Edge, served from localhost: `make web`).
+  Protocol: see main/ble_link.h. Everything is in this one file on purpose.
+-->
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70;
+  --border: #e2e2de; --accent: #2f6fde; --ok: #1f8a4c; --warn: #b26a00;
+  --bad: #c0362c; --idle: #8a8a90; --checker: #ededea;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151517; --panel: #1e1e21; --text: #ececee; --muted: #9a9aa2;
+    --border: #2e2e33; --accent: #6b9cff; --ok: #4fc483; --warn: #e0a040;
+    --bad: #ff6b5e; --idle: #77777f; --checker: #26262a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151517; --panel: #1e1e21; --text: #ececee; --muted: #9a9aa2;
+  --border: #2e2e33; --accent: #6b9cff; --ok: #4fc483; --warn: #e0a040;
+  --bad: #ff6b5e; --idle: #77777f; --checker: #26262a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+}
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+.status { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); }
+.dot.on { background: var(--ok); }
+.dot.busy { background: var(--warn); }
+.dot.err { background: var(--bad); }
+.metrics { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.metrics b { color: var(--text); font-weight: 600; }
+.spacer { flex: 1; }
+button, select, input[type=number] {
+  font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+select, input[type=number] { padding: 5px 8px; }
+input[type=number] { width: 70px; cursor: text; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.active { background: var(--ok); border-color: var(--ok); color: #fff; }
+button:disabled, select:disabled, input:disabled { opacity: .45; cursor: default; }
+#notice { margin: 16px 16px 0; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--warn);
+  color: var(--warn); display: none; }
+main {
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px;
+  align-items: start;
+}
+@media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+section {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; min-width: 0;
+}
+h2 {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+h2 .tools { margin-left: auto; display: flex; gap: 8px; align-items: center;
+  text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+h2 .tools button, h2 .tools select { padding: 3px 8px; }
+.side { display: grid; gap: 16px; }
+.viewer {
+  display: flex; align-items: center; justify-content: center; min-height: 320px; padding: 12px;
+  overflow: auto;
+  background-image: conic-gradient(var(--checker) 25%, transparent 0 50%, var(--checker) 0 75%, transparent 0);
+  background-size: 16px 16px;
+}
+canvas { display: block; image-rendering: pixelated; max-width: 100%; }
+canvas.fit { width: 100%; height: auto; }
+.empty { color: var(--muted); padding: 24px 12px; text-align: center; }
+.caption { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--muted);
+  font-family: var(--mono); font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.progress { height: 3px; background: var(--border); }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .05s linear; }
+.controls { padding: 12px; display: grid; gap: 10px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row label { color: var(--muted); min-width: 72px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+td { padding: 4px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+td:first-child { color: var(--muted); white-space: nowrap; width: 1%; }
+td:last-child { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+#log { font-family: var(--mono); font-size: 12px; max-height: 260px; overflow: auto; padding: 6px 12px; margin: 0;
+  white-space: pre-wrap; }
+#log .tx { color: var(--accent); } #log .err { color: var(--bad); } #log .ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>HandDetector</h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="state">disconnected</span></span>
+  <div class="metrics">
+    <span><b id="m-fps">0.0</b> fps</span>
+    <span><b id="m-kbps">0.0</b> KB/s</span>
+    <span><b id="m-frames">0</b> frames</span>
+    <span><b id="m-crc">0</b> CRC errors</span>
+  </div>
+  <span class="spacer"></span>
+  <button id="connect" class="primary">Connect</button>
+</header>
+<div id="notice"></div>
+<main>
+  <section>
+    <h2>Camera
+      <span class="tools">
+        <select id="zoom" title="Display scale">
+          <option value="fit">fit</option><option value="1">1×</option>
+          <option value="2">2×</option><option value="3">3×</option>
+        </select>
+        <button id="save-raw" disabled title="Save the bytes as received">Save raw</button>
+        <button id="save-png" disabled>Save PNG</button>
+      </span>
+    </h2>
+    <div class="progress"><div id="progress"></div></div>
+    <div class="viewer">
+      <canvas id="canvas" class="fit" hidden></canvas>
+      <div id="viewer-empty" class="empty">No frame yet. Connect, then Snap or Stream.</div>
+    </div>
+    <div class="caption" id="caption"><span>—</span></div>
+  </section>
+
+  <div class="side">
+    <section>
+      <h2>Control</h2>
+      <div class="controls">
+        <div class="row">
+          <button id="snap" class="primary" disabled>Snap</button>
+          <button id="stream" disabled>Stream</button>
+        </div>
+        <div class="row">
+          <label for="fmt">Format</label>
+          <select id="fmt" disabled>
+            <option value="jpeg">JPEG</option>
+            <option value="gray">Grayscale</option>
+            <option value="rgb565">RGB565</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="res">Resolution</label>
+          <select id="res" disabled>
+            <option value="96x96">96×96</option>
+            <option value="qqvga">QQVGA 160×120</option>
+            <option value="qcif">QCIF 176×144</option>
+            <option value="240x240">240×240</option>
+            <option value="qvga">QVGA 320×240</option>
+            <option value="cif">CIF 400×296</option>
+            <option value="vga">VGA 640×480</option>
+            <option value="svga">SVGA 800×600</option>
+            <option value="xga">XGA 1024×768</option>
+            <option value="sxga">SXGA 1280×1024</option>
+            <option value="uxga">UXGA 1600×1200</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="q">JPEG q</label>
+          <input id="q" type="number" min="4" max="63" step="1" value="12" disabled>
+          <span style="color:var(--muted)">4 best … 63 worst</span>
+        </div>
+        <div class="row">
+          <label for="xclk">XCLK</label>
+          <input id="xclk" type="number" min="5" max="24" step="1" value="20" disabled>
+          <span style="color:var(--muted)">MHz (re-inits camera)</span>
+        </div>
+        <form class="row" id="cmd-form">
+          <label for="cmd">Command</label>
+          <input id="cmd" type="text" placeholder="set gainceiling 2 · reg 0x100" disabled
+                 style="flex:1;min-width:0;font:inherit;font-family:var(--mono);font-size:12.5px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text)">
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <h2>Device <span class="tools"><button id="refresh" disabled>Refresh</button></span></h2>
+      <table><tbody id="info"><tr><td>—</td><td>not connected</td></tr></tbody></table>
+    </section>
+
+    <section>
+      <h2>Log <span class="tools"><button id="clear">Clear</button></span></h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+<script>
+"use strict";
+
+// Must match main/ble_link.h.
+const uuid = (n) => `4844000${n}-6b2e-4c8a-9f3e-5a1b2c3d4e5f`;
+const SERVICE_UUID = uuid(1);
+const CTRL_UUID = uuid(2), EVENT_UUID = uuid(3), INFO_UUID = uuid(4), FRAME_UUID = uuid(5);
+const REC_HEADER = 0x01, REC_DATA = 0x02;
+const PIX = { 0: "rgb565", 3: "gray", 4: "jpeg" };
+
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+let device = null, chars = {};
+let streaming = false;
+let lastFrame = null;          // { bytes, w, h, fmt, id }
+const stats = { frames: 0, crc: 0, times: [], bytes: [] };
+
+// ---- log / status -------------------------------------------------------
+
+function log(msg, cls = "") {
+  const el = $("log");
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = `${new Date().toLocaleTimeString()}  ${msg}`;
+  el.append(line);
+  while (el.childElementCount > 300) el.firstChild.remove();
+  el.scrollTop = el.scrollHeight;
+}
+
+function setState(text, dot) {
+  $("state").textContent = text;
+  $("dot").className = "dot " + (dot || "");
+}
+
+function setConnected(on) {
+  for (const id of ["snap", "stream", "fmt", "res", "q", "xclk", "cmd", "refresh"]) $(id).disabled = !on;
+  $("connect").textContent = on ? "Disconnect" : "Connect";
+  $("connect").classList.toggle("primary", !on);
+  if (!on) setStreaming(false);
+}
+
+function setStreaming(on) {
+  streaming = on;
+  $("stream").textContent = on ? "Stop" : "Stream";
+  $("stream").classList.toggle("active", on);
+}
+
+// ---- GATT operation queue ------------------------------------------------
+// Chrome rejects a GATT read/write while another is in flight ("GATT
+// operation already in progress"), so every op goes through one chain.
+
+let gattChain = Promise.resolve();
+function gatt(op) {
+  const p = gattChain.then(op);
+  gattChain = p.catch(() => {});
+  return p;
+}
+
+async function send(cmd) {
+  log(`> ${cmd}`, "tx");
+  try {
+    await gatt(() => chars.ctrl.writeValueWithResponse(enc.encode(cmd)));
+  } catch (e) {
+    log(`write failed: ${e.message}`, "err");
+  }
+}
+
+async function refreshInfo() {
+  try {
+    const v = await gatt(() => chars.info.readValue());
+    showInfo(JSON.parse(dec.decode(v)));
+  } catch (e) {
+    log(`info read failed: ${e.message}`, "err");
+  }
+}
+
+// ---- connect --------------------------------------------------------------
+
+async function connect() {
+  try {
+    setState("choosing device…", "busy");
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    setState(`connecting to ${device.name || "device"}…`, "busy");
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE_UUID);
+    chars = {
+      ctrl: await svc.getCharacteristic(CTRL_UUID),
+      event: await svc.getCharacteristic(EVENT_UUID),
+      info: await svc.getCharacteristic(INFO_UUID),
+      frame: await svc.getCharacteristic(FRAME_UUID),
+    };
+    chars.event.addEventListener("characteristicvaluechanged", onEvent);
+    chars.frame.addEventListener("characteristicvaluechanged", onFrameChunk);
+    await chars.event.startNotifications();
+    await chars.frame.startNotifications();
+    setState(`connected: ${device.name || "device"}`, "on");
+    setConnected(true);
+    log("connected", "ok");
+    await refreshInfo();
+  } catch (e) {
+    setState("disconnected", e.name === "NotFoundError" ? "" : "err");
+    if (e.name !== "NotFoundError") log(`connect failed: ${e.message}`, "err");
+    if (device?.gatt.connected) device.gatt.disconnect();
+  }
+}
+
+function onDisconnected() {
+  setState("disconnected", "");
+  setConnected(false);
+  log("disconnected");
+  frame = null;
+  $("progress").style.width = "0";
+}
+
+// ---- events ---------------------------------------------------------------
+
+function onEvent(ev) {
+  const text = dec.decode(ev.target.value);
+  log(`< ${text}`, text.startsWith("err") ? "err" : "ok");
+  const [status, cmd, arg] = text.split(" ");
+  if (status === "ok" && cmd === "stream") setStreaming(arg === "on");
+  if (status === "err" && cmd === "capture") setStreaming(false);
+  // Re-read state after anything but snap (the info read would queue
+  // behind nothing, but it's noise while frames are flowing).
+  if (cmd !== "snap") refreshInfo();
+}
+
+function showInfo(i) {
+  const c = i.cam || {};
+  const rows = [
+    ["firmware", i.fw], ["ESP-IDF", i.idf],
+    ["uptime", `${(i.uptime_ms / 1000).toFixed(0)} s`],
+    ["free heap", `${(i.heap / 1024).toFixed(0)} KB internal, ${(i.psram / 1024).toFixed(0)} KB PSRAM`],
+    ["BLE link", `MTU ${i.mtu}, ${(i.itvl_us / 1000).toFixed(1)} ms interval, ${i.phy}M PHY`],
+    ["sensor", c.ready ? `${c.sensor} (PID 0x${c.pid.toString(16)})` : "not detected"],
+    ["mode", `${c.fmt} ${c.res} ${c.w}×${c.h}`],
+    ["JPEG quality", c.q], ["XCLK", `${c.xclk} MHz`],
+    ["frames sent", i.frames], ["notify retries", i.retries],
+  ];
+  $("info").replaceChildren(...rows.map(([k, v]) => {
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"), b = document.createElement("td");
+    a.textContent = k; b.textContent = v ?? "—";
+    tr.append(a, b);
+    return tr;
+  }));
+  if (c.fmt) $("fmt").value = c.fmt;
+  if (c.res) $("res").value = c.res;
+  if (c.q) $("q").value = c.q;
+  if (c.xclk) $("xclk").value = c.xclk;
+  setStreaming(!!i.streaming);
+}
+
+// ---- frames ---------------------------------------------------------------
+
+let frame = null; // in-progress: { id, total, w, h, fmt, crc, buf, got, t0 }
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function onFrameChunk(ev) {
+  const dv = ev.target.value;
+  const type = dv.getUint8(0), id = dv.getUint16(1, true);
+  if (type === REC_HEADER) {
+    frame = {
+      id, total: dv.getUint32(3, true), w: dv.getUint16(7, true), h: dv.getUint16(9, true),
+      fmt: dv.getUint8(11), ts: dv.getUint32(12, true), crc: dv.getUint32(16, true),
+      got: 0, t0: performance.now(),
+    };
+    frame.buf = new Uint8Array(frame.total);
+    return;
+  }
+  if (type !== REC_DATA || !frame || frame.id !== id) return; // stray chunk
+  const off = dv.getUint32(3, true);
+  const data = new Uint8Array(dv.buffer, dv.byteOffset + 7, dv.byteLength - 7);
+  if (off + data.length > frame.total) { log(`frame ${id}: chunk past end`, "err"); frame = null; return; }
+  frame.buf.set(data, off);
+  frame.got += data.length;
+  $("progress").style.width = `${(100 * frame.got / frame.total).toFixed(1)}%`;
+  if (frame.got >= frame.total) finishFrame(frame);
+}
+
+async function finishFrame(f) {
+  frame = null;
+  const ms = performance.now() - f.t0;
+  const ok = crc32(f.buf) === f.crc;
+  if (!ok) {
+    stats.crc++;
+    $("m-crc").textContent = stats.crc;
+    log(`frame ${f.id}: CRC mismatch`, "err");
+  }
+  stats.frames++;
+  const now = performance.now();
+  stats.times.push(now); stats.bytes.push(f.total);
+  while (stats.times.length > 1 && now - stats.times[0] > 5000) { stats.times.shift(); stats.bytes.shift(); }
+  updateMetrics();
+
+  const fmt = PIX[f.fmt] || `fmt ${f.fmt}`;
+  try {
+    await render(f);
+  } catch (e) {
+    log(`frame ${f.id}: can't render ${fmt}: ${e.message}`, "err");
+  }
+  lastFrame = { bytes: f.buf, w: f.w, h: f.h, fmt, id: f.id };
+  $("save-raw").disabled = $("save-png").disabled = false;
+  const kbps = f.total / 1024 / (ms / 1000);
+  setCaption([`#${f.id}`, `${f.w}×${f.h}`, fmt, `${(f.total / 1024).toFixed(1)} KB`,
+              `${ms.toFixed(0)} ms (${kbps.toFixed(1)} KB/s)`, ok ? "CRC ok" : "CRC BAD",
+              `t=${(f.ts / 1000).toFixed(2)} s`]);
+}
+
+function updateMetrics() {
+  const t = stats.times, n = t.length;
+  const span = n > 1 ? (t[n - 1] - t[0]) / 1000 : 0;
+  $("m-fps").textContent = span ? ((n - 1) / span).toFixed(1) : "0.0";
+  const bytes = stats.bytes.slice(1).reduce((a, b) => a + b, 0);
+  $("m-kbps").textContent = span ? (bytes / 1024 / span).toFixed(1) : "0.0";
+  $("m-frames").textContent = stats.frames;
+}
+
+function setCaption(parts) {
+  $("caption").replaceChildren(...parts.map((p) => {
+    const s = document.createElement("span"); s.textContent = p; return s;
+  }));
+}
+
+async function render(f) {
+  const cv = $("canvas"), ctx = cv.getContext("2d");
+  if (f.fmt === 4) {
+    const bmp = await createImageBitmap(new Blob([f.buf], { type: "image/jpeg" }));
+    cv.width = bmp.width; cv.height = bmp.height;
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close();
+  } else if (f.fmt === 3 || f.fmt === 0) {
+    const px = f.w * f.h, need = f.fmt === 3 ? px : px * 2;
+    if (f.buf.length < need) throw new Error(`${f.buf.length} bytes, expected ${need}`);
+    cv.width = f.w; cv.height = f.h;
+    const img = ctx.createImageData(f.w, f.h), d = img.data;
+    for (let i = 0; i < px; i++) {
+      let r, g, b;
+      if (f.fmt === 3) {
+        r = g = b = f.buf[i];
+      } else {
+        // esp32-camera hands RGB565 out big-endian (high byte first).
+        const v = (f.buf[2 * i] << 8) | f.buf[2 * i + 1];
+        r = (v >> 11) << 3; g = ((v >> 5) & 0x3f) << 2; b = (v & 0x1f) << 3;
+      }
+      d[4 * i] = r; d[4 * i + 1] = g; d[4 * i + 2] = b; d[4 * i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  } else {
+    throw new Error("unknown pixel format");
+  }
+  cv.hidden = false;
+  $("viewer-empty").hidden = true;
+  applyZoom();
+}
+
+function applyZoom() {
+  const cv = $("canvas"), z = $("zoom").value;
+  cv.classList.toggle("fit", z === "fit");
+  cv.style.width = z === "fit" ? "" : `${cv.width * Number(z)}px`;
+}
+
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---- wiring -----------------------------------------------------------------
+
+$("connect").onclick = () => (device?.gatt.connected ? device.gatt.disconnect() : connect());
+$("snap").onclick = () => send("snap");
+$("stream").onclick = () => send(streaming ? "stream off" : "stream on");
+$("fmt").onchange = (e) => send(`fmt ${e.target.value}`);
+$("res").onchange = (e) => send(`res ${e.target.value}`);
+$("q").onchange = (e) => send(`q ${e.target.value}`);
+$("xclk").onchange = (e) => send(`xclk ${e.target.value}`);
+$("refresh").onclick = refreshInfo;
+$("cmd-form").onsubmit = (e) => {
+  e.preventDefault();
+  const v = $("cmd").value.trim();
+  if (v) send(v);
+};
+$("zoom").onchange = applyZoom;
+$("clear").onclick = () => $("log").replaceChildren();
+$("save-raw").onclick = () => {
+  const f = lastFrame;
+  const ext = f.fmt === "jpeg" ? "jpg" : `${f.w}x${f.h}.${f.fmt}`;
+  download(new Blob([f.bytes]), `frame-${f.id}.${ext}`);
+};
+$("save-png").onclick = () => $("canvas").toBlob((b) => download(b, `frame-${lastFrame.id}.png`));
+
+if (!navigator.bluetooth) {
+  $("notice").style.display = "block";
+  $("notice").textContent = window.isSecureContext
+    ? "Web Bluetooth isn't available in this browser. Use Chrome or Edge on desktop or Android."
+    : "Web Bluetooth needs a secure context. Open this page via http://localhost (make web), not file://.";
+  $("connect").disabled = true;
+}
+</script>
+</body>
+</html>

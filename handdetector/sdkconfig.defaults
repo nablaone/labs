@@ -18,3 +18,19 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+
+# 1 kHz tick: the BLE sender waits on notify-complete events with short
+# timeouts; at the default 100 Hz the shortest wait is 10 ms.
+CONFIG_FREERTOS_HZ=1000
+
+# BLE diagnostic link to web/index.html (main/ble_link.c): NimBLE host,
+# peripheral role only, one client at a time. Big ATT MTU and more mbufs
+# for streaming camera frames.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=32
