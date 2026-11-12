@@ -552,6 +552,10 @@ Ordered by expected payoff:
 6. **Overlap capture with inference:** with raw frames the grab is ~3 ms,
    so this is now worth little.
 
+Most of 1, 2 and 5 are blocked by TFLM itself (one arena, whole ops,
+its own planner). The plan to replace it with our own converter and
+runtime is in [own-runtime-plan.md](own-runtime-plan.md).
+
 ## Pitfalls hit along the way
 
 - **The idle-task watchdog on core 1 had to go.** An inference blocks
