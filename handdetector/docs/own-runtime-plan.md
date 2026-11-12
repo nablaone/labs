@@ -2,6 +2,8 @@
 
 Status: **plan, not started** (2026-11-12). Pick up from "Next session" at
 the bottom.
+The autotuning plan ([autotune-plan.md](autotune-plan.md)) runs alongside
+and reuses phase 0.
 
 ## Why
 
