@@ -1,0 +1,15 @@
+[project]
+name = "handdetector-mac"
+version = "0.1.0"
+description = "Palm detector (MediaPipe, OpenCV zoo ONNX) on a Mac: CPU, GPU and Neural Engine"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "onnx",
+    "onnxruntime",
+    "onnx2torch",
+    "torchvision==0.22.0",  # onnx2torch dependency, must match torch
+    "torch==2.7.0",        # newest torch coremltools 9.0 is tested with
+    "coremltools",
+]
