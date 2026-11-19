@@ -1,0 +1,7 @@
+.venv/
+build/
+# Cockos manuals, downloaded locally for reference (not ours to redistribute)
+docs/
+# same content as original/extracted/, which the build reads
+original/*.ReaperThemeZip
+__pycache__/
