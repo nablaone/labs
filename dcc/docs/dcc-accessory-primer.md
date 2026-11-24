@@ -207,6 +207,7 @@ cathode to pin 2).
   VBUS.
 - **Later, track power instead of battery**: bridge rectifier →
   capacitor → buck converter to 5 V (which then also feeds the 6N137).
+  Details in [track-power.md](track-power.md).
 - **Input pin** on the C3 Super Mini: pick a non-strapping GPIO, e.g.
   GPIO3–GPIO7, GPIO10, GPIO20 or GPIO21. Avoid GPIO2, GPIO8 and GPIO9,
   which are strapping pins (and GPIO8 is the LED, GPIO9 is BOOT).
