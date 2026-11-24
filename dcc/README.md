@@ -65,6 +65,11 @@ commands: `help`, `version`, `exit`, plus:
   ```
 - `ble`: Bluetooth link state (advertising/streaming), MTU, packets sent
   and lost.
+- `led ...`: addressable LED chain on GPIO5. `led` shows the state, and
+  the subcommands are `led <n|all> on|off|<colour>|<r g b>`, `led bright`,
+  `led order`, `led test` and `led probe` (loopback self-test with a
+  GPIO5→GPIO6 jumper, no scope needed). Wiring and bring-up are in
+  [docs/leds.md](docs/leds.md).
 - `dcc stats [clear]`: packet and error counters since boot.
 - `dcc timing [ms]`: histogram of edge-to-edge times on the DCC input.
   A working opto stage shows peaks at 50–60 µs and 90–120 µs. Use this
@@ -80,7 +85,11 @@ internet:
 make web                # then open http://localhost:8000
 ```
 
-Click **Connect** and pick `DCC-Sniffer`. The page has two parts:
+Click **Connect** and pick `DCC-Sniffer`. The page has three parts:
+
+- **LEDs**: click a bulb to switch it on or off, set colours, set the
+  brightness. It follows `led` CLI changes live (see
+  [docs/leds.md](docs/leds.md)).
 
 - **Current state**: one entry per loco/accessory address with the last
   known value of each parameter (speed, direction, functions, turnout
@@ -118,6 +127,11 @@ the same packets, so use one or the other.
   characteristic (the record format is in `ble_link.h`), but only while a
   client is subscribed. Provides the `ble` CLI command (state, MTU,
   counters).
+- `leds.c/.h`: addressable LED chain (WS2812D-F5 / PL9823) on
+  `LEDS_GPIO`, driven by the RMT peripheral's bytes encoder. Each LED
+  has a colour plus an on/off flag, with one global brightness. Provides
+  the `led` CLI command. `ble_link` exposes the same LED state as a
+  read/write/notify characteristic for the web page.
 - `node_config.h`: pins (with Super Mini pin notes) and `FIRMWARE_VERSION`.
 
 Planned modules (see the primer's §8): accessory address matching, output pulsing, NVS config with a

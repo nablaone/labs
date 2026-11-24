@@ -7,6 +7,7 @@
 #include "heartbeat_task.h"
 #include "dcc.h"
 #include "ble_link.h"
+#include "leds.h"
 
 static const char *TAG = "main";
 
@@ -24,6 +25,8 @@ void app_main(void)
 	heartbeat_task_init();
 	dcc_init();
 	dcc_register_cli_commands();
+	leds_init();
+	leds_register_cli_commands();
 	ble_link_init();
 	ble_link_register_cli_commands();
 

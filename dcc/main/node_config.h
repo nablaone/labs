@@ -35,3 +35,29 @@
  * half of every DCC bit.
  */
 #define DCC_IN_GPIO GPIO_NUM_4
+
+/*
+ * Addressable LED chain (5 mm WS2812D-F5 / PL9823), see leds.h and
+ * ../docs/leds.md for wiring. GPIO5: free, not a strapping pin. (It's
+ * GPIO4's neighbour in numbering only: on the board GPIO4 is on the
+ * other edge, GPIO5 is the top pin of the right edge next to USB.)
+ * Through a 330 ohm series resistor to the first LED's DIN.
+ *
+ * LEDS_COUNT only has to be >= the LEDs actually wired: surplus colours
+ * fall off the end of the chain. LEDS_ORDER_RGB: 0 for WS2812 (green
+ * byte first), 1 for PL9823 -- switchable at runtime with "led order".
+ * Default brightness is low: these are blinding at 255 and draw
+ * ~60 mA each at full white.
+ */
+#define LEDS_GPIO               GPIO_NUM_5
+#define LEDS_COUNT              8
+#define LEDS_ORDER_RGB          0
+#define LEDS_DEFAULT_BRIGHTNESS 40
+
+/*
+ * "led probe" loopback input: jumper it to LEDS_GPIO and the RMT
+ * receiver reads back what the LED driver sends (see leds.c). GPIO6 is
+ * the pin right below GPIO5 on the board, so a short jumper does it.
+ * Only claimed the first time "led probe" runs.
+ */
+#define LEDS_PROBE_GPIO         GPIO_NUM_6

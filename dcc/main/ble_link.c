@@ -17,6 +17,7 @@
 
 #include "dcc.h"
 #include "ble_link.h"
+#include "leds.h"
 
 static const char *TAG = "ble";
 
@@ -42,8 +43,12 @@ static const ble_uuid128_t svc_uuid = BLE_UUID128_INIT(
 static const ble_uuid128_t packets_uuid = BLE_UUID128_INIT(
 	0x5f, 0x4e, 0x3d, 0x2c, 0x1b, 0x5a, 0x3e, 0x9f,
 	0x8a, 0x4c, 0x2e, 0x6b, 0x02, 0x00, 0xcc, 0xd0);
+static const ble_uuid128_t leds_uuid = BLE_UUID128_INIT(
+	0x5f, 0x4e, 0x3d, 0x2c, 0x1b, 0x5a, 0x3e, 0x9f,
+	0x8a, 0x4c, 0x2e, 0x6b, 0x03, 0x00, 0xcc, 0xd0);
 
 static uint16_t packets_handle;
+static uint16_t leds_handle;
 static uint8_t own_addr_type;
 
 /* Written by the NimBLE host task (GAP events), read by
@@ -67,6 +72,69 @@ static int gatt_access(uint16_t conn, uint16_t attr,
 	return BLE_ATT_ERR_UNLIKELY;
 }
 
+/* LED characteristic, format in ble_link.h. Runs in the NimBLE host
+ * task; the leds_* calls take leds.c's mutex, so they're safe against
+ * the CLI changing the LEDs at the same time. */
+static int leds_access(uint16_t conn, uint16_t attr,
+		       struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+	if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+		uint8_t buf[2 + 4 * 32];
+		uint8_t n = leds_count();
+		if (n > 32) {
+			n = 32;
+		}
+		buf[0] = n;
+		buf[1] = leds_brightness();
+		for (uint8_t i = 0; i < n; i++) {
+			led_state_t s = leds_get(i);
+			uint8_t *p = buf + 2 + i * 4;
+			p[0] = s.on;
+			p[1] = s.r;
+			p[2] = s.g;
+			p[3] = s.b;
+		}
+		return os_mbuf_append(ctxt->om, buf, 2 + n * 4) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+	}
+
+	if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+		uint8_t cmd[5];
+		uint16_t len = 0;
+		if (ble_hs_mbuf_to_flat(ctxt->om, cmd, sizeof(cmd), &len) != 0 || len < 2) {
+			return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+		}
+		bool ok;
+		switch (cmd[0]) {
+		case LEDS_OP_ON:
+			ok = len == 3 && leds_set_on(cmd[1], cmd[2] != 0);
+			break;
+		case LEDS_OP_COLOR:
+			ok = len == 5 && leds_set_color(cmd[1], cmd[2], cmd[3], cmd[4]);
+			break;
+		case LEDS_OP_BRIGHTNESS:
+			ok = len == 2;
+			if (ok) {
+				leds_set_brightness(cmd[1]);
+			}
+			break;
+		default:
+			ok = false;
+		}
+		return ok ? 0 : BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+	}
+
+	return BLE_ATT_ERR_UNLIKELY;
+}
+
+/* leds.c change callback: tells a subscribed page to re-read, so it
+ * also follows changes made from the CLI. ble_gatts_chr_updated() sends
+ * a notification carrying the value leds_access() returns (truncated to
+ * the MTU -- the page re-reads in full either way). */
+static void on_leds_changed(void)
+{
+	ble_gatts_chr_updated(leds_handle);
+}
+
 static const struct ble_gatt_svc_def gatt_svcs[] = {
 	{
 		.type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -77,6 +145,13 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
 				.access_cb = gatt_access,
 				.flags = BLE_GATT_CHR_F_NOTIFY,
 				.val_handle = &packets_handle,
+			},
+			{
+				.uuid = &leds_uuid.u,
+				.access_cb = leds_access,
+				.flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE |
+					 BLE_GATT_CHR_F_NOTIFY,
+				.val_handle = &leds_handle,
 			},
 			{ 0 },
 		},
@@ -202,6 +277,7 @@ void ble_link_init(void)
 	ESP_ERROR_CHECK(ble_gatts_count_cfg(gatt_svcs) == 0 ? ESP_OK : ESP_FAIL);
 	ESP_ERROR_CHECK(ble_gatts_add_svcs(gatt_svcs) == 0 ? ESP_OK : ESP_FAIL);
 	ble_svc_gap_device_name_set(BLE_DEVICE_NAME);
+	leds_set_change_cb(on_leds_changed);
 
 	nimble_port_freertos_init(host_task);
 }
