@@ -41,7 +41,7 @@ Next: install icarus-verilog, verilator, gtkwave, yosys and a RISC-V GCC;
 vendor femtorv32_quark.v; write a minimal testbench with a ROM running a
 few instructions and look at the waveforms.
 
-## 2026-11-25 — Docker toolchain, hello on QEMU and on FemtoRV32 Quark
+## 2026-11-25 — [01] Docker toolchain, hello on QEMU and on FemtoRV32 Quark
 
 Core: FemtoRV32 Quark, vendored unchanged into vendor/femtorv32/ from
 BrunoLevy/learn-fpga commit f5ada24ae6cca67d99889daec2c4ee44a6e59417,
@@ -91,3 +91,49 @@ host side of the Makefile.
 Next: look at the waveform (make sim with +vcd, GTKWave on the host),
 walk through one instruction per state of the Quark FSM, then write a
 small benchmark (int8 dot product) as the baseline for custom opcodes.
+
+## 2026-11-25 — restructure: numbered experiments and a common bench
+
+Why: there will be many CPU variants, and every one should stay readable
+and runnable side by side.
+
+New layout. exp/NN-name/ holds one experiment: its own copy of the CPU in
+rtl/, a thin testbench in sim/tb.v, its own programs in sw/, exp.mk and
+README.md. common/ holds what all experiments share: sim/soc.v (clock,
+reset, RAM, UART probe, exit device), sw/rt/ (crt0.S, link.ld, lib.h
+with putc_/puts_/puthex/rdcycle), the shared programs (sw/hello) and the
+make rules (mk/rules.mk).
+
+The first experiment is exp/01-femto-quark, a copy of
+vendor/femtorv32/femtorv32_quark.v, unchanged.
+
+Make: make list, make run E=01 [P=hello] [SIMARGS=+vcd], make lint E=01,
+make qemu P=hello, make compare (one line per experiment and program),
+make new E=NN FROM=MM NAME=x.
+
+Changes in the bench along the way:
+The hex image is now padded to the full 64 KB (objcopy --pad-to), so
+$readmemh no longer warns about a short file.
+The bench takes +maxcycles=<n>, default 1000000.
+The linker warning about an RWX segment is silenced, since one flat RAM
+region is intended.
+
+Gotcha, a reset race in the testbench. After the move, hello reported
+1189 cycles instead of 1190, with a byte-identical binary. The bench
+released reset with a blocking "reset_n = 1" right after
+@(posedge clk). Whether the CPU sees the new value on that same edge
+depends on the order the simulator happens to run things in, and adding
+a port hop (reset now comes out of soc.v) flipped it. Fixed with a
+non-blocking "reset_n <= 1", which always changes after the edge, the
+way a real flip-flop output does. Result: back to 1190 cycles, now
+deterministic. Lesson: in a testbench, drive anything the DUT samples on
+a clock edge with <=, or away from the edge.
+
+Results:
+make compare prints "01-femto-quark hello PASS 1190 cycles".
+make qemu P=hello still prints hello.
+make new E=99 FROM=01 NAME=scratch was tested and the scratch copy then
+deleted.
+
+Next: unchanged from the previous entry (waveform walk-through, then an
+int8 dot-product benchmark in common/sw/ as the baseline).

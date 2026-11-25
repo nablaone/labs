@@ -1,28 +1,37 @@
-// Testbench: FemtoRV32 Quark + 64 KB RAM + UART + exit device.
-// Memory map matches QEMU virt, so the same ELF runs on both:
+// The "lab bench" shared by all experiments: clock, reset, 64 KB RAM,
+// a UART probe and an exit device, on a FemtoRV-style memory bus.
+// Only the CPU is the device under test; everything here is simulation
+// equipment ($write, $finish, # delays are not synthesizable).
+//
+// Memory map, matching QEMU virt so the same ELF runs on both:
 //   0x80000000  RAM, 64 KB, loaded from +hex=<file>
 //   0x10000000  UART: a byte written here is printed
-//   0x00100000  exit device (sifive_test encoding, see crt0.S)
+//   0x00100000  exit device (sifive_test: 0x5555 pass, (code<<16)|0x3333 fail)
+//
+// Bus protocol (FemtoRV): the CPU pulses mem_rstrb with an address, the
+// word is on mem_rdata the next cycle. A write is any cycle with a
+// non-zero mem_wmask (one bit per byte lane). A CPU with a different bus
+// needs an adapter in its experiment's sim/ directory.
+//
+// Plusargs: +hex=<file> (required), +vcd (dump tb.vcd), +maxcycles=<n>.
 `timescale 1ns/1ps
 
-module tb;
-    reg clk = 0;
-    reg reset_n = 0;            // Quark's reset is active low
-    always #5 clk = ~clk;       // 100 MHz, the period only matters for VCD
+module soc (
+    output reg        clk,
+    output reg        reset_n,     // active low, released after 4 cycles
+    input      [31:0] mem_addr,
+    input      [31:0] mem_wdata,
+    input      [3:0]  mem_wmask,
+    input             mem_rstrb,
+    output reg [31:0] mem_rdata,
+    output            mem_rbusy,
+    output            mem_wbusy
+);
+    assign mem_rbusy = 1'b0;   // RAM answers in one cycle, never busy
+    assign mem_wbusy = 1'b0;
 
-    wire [31:0] mem_addr, mem_wdata;
-    wire [3:0]  mem_wmask;
-    wire        mem_rstrb;
-    reg  [31:0] mem_rdata;
-
-    // ADDR_WIDTH=32: the default 24 would alias the UART at 0x10000000 to 0.
-    FemtoRV32 #(.RESET_ADDR(32'h80000000), .ADDR_WIDTH(32)) cpu (
-        .clk(clk),
-        .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_wmask(mem_wmask),
-        .mem_rdata(mem_rdata), .mem_rstrb(mem_rstrb),
-        .mem_rbusy(1'b0), .mem_wbusy(1'b0),
-        .reset(reset_n)
-    );
+    initial clk = 0;
+    always #5 clk = ~clk;      // 100 MHz; the period only matters for VCD
 
     localparam RAM_WORDS = 16384;
     reg [31:0] ram [0:RAM_WORDS-1];
@@ -32,7 +41,9 @@ module tb;
     wire        is_exit = mem_addr == 32'h00100000;
     wire [13:0] widx    = mem_addr[15:2];
 
-    // Synchronous RAM: the core strobes mem_rstrb, data is there next cycle.
+    integer cycle = 0;
+    integer maxcycles = 1_000_000;
+
     always @(posedge clk) begin
         if (mem_rstrb)
             mem_rdata <= is_ram ? ram[widx] : 32'h0;
@@ -59,29 +70,30 @@ module tb;
         end
     end
 
-    integer cycle = 0;
     always @(posedge clk) begin
         cycle <= cycle + 1;
-        if (cycle > 1_000_000) begin
-            $display("[tb] TIMEOUT, pc stuck near 0x%08x", mem_addr);
+        if (cycle > maxcycles) begin
+            $display("[tb] TIMEOUT after %0d cycles, addr 0x%08x",
+                     cycle, mem_addr);
             $finish;
         end
     end
 
     reg [1023:0] hexfile;
-    integer i;
     initial begin
-        for (i = 0; i < RAM_WORDS; i = i + 1) ram[i] = 32'h0;
+        reset_n = 0;
         if (!$value$plusargs("hex=%s", hexfile)) begin
             $display("[tb] usage: vvp tb.vvp +hex=<file>");
             $finish;
         end
+        if ($value$plusargs("maxcycles=%d", maxcycles)) ;
+        // The hex file is padded to the full 64 KB, so this fills all RAM.
         $readmemh(hexfile, ram);
         if ($test$plusargs("vcd")) begin
             $dumpfile("tb.vcd");
-            $dumpvars(0, tb);
+            $dumpvars(0);
         end
         repeat (4) @(posedge clk);
-        reset_n = 1;
+        reset_n <= 1;   // non-blocking: changes after this edge, no race with the CPU
     end
 endmodule

@@ -1,11 +1,18 @@
-# Run from the host: every target re-runs itself inside the riscv-lab image.
-#   make image   build the Docker image
-#   make sw      cross-compile sw/hello for rv32i
-#   make qemu    run hello on qemu-system-riscv32 (virt machine)
-#   make sim     run the same hello.elf on FemtoRV32 Quark in Icarus Verilog
-#                (make sim SIMARGS=+vcd writes build/tb.vcd)
-#   make lint    verilator lint of the core
-#   make shell   interactive shell in the image
+# riscv lab. Run everything from the host; targets re-run inside Docker.
+#
+#   make image                         build the riscv-lab Docker image
+#   make shell                         interactive shell in the image
+#   make list                          list experiments
+#   make run E=01                      simulate all programs of experiment 01
+#   make run E=01 P=hello              one program
+#   make run E=01 P=hello SIMARGS=+vcd also dump build/<exp>/<prog>/tb.vcd
+#   make lint E=01                     verilator lint of the experiment's RTL
+#   make qemu P=hello                  reference run on qemu-system-riscv32
+#   make compare                       every experiment x program, cycle counts
+#   make new E=02 FROM=01 NAME=quark-mac   copy an experiment to start a variant
+#   make clean
+#
+# E matches the experiment number prefix (E=01 -> exp/01-*).
 
 IMAGE := riscv-lab
 
@@ -17,52 +24,12 @@ image:
 shell:
 	docker run --rm -it -v $(CURDIR):/work $(IMAGE) bash
 
-all sw qemu sim lint clean %:
+TARGETS := all list run lint qemu compare new clean
+$(TARGETS):
 	docker run --rm -e MAKEFLAGS -v $(CURDIR):/work $(IMAGE) make $@
 
-.PHONY: image shell all sw qemu sim lint clean
+.PHONY: image shell $(TARGETS)
 
 else
-
-CROSS   := riscv64-unknown-elf-
-ARCH    := -march=rv32i -mabi=ilp32
-CFLAGS  := $(ARCH) -Os -g -ffreestanding -nostdlib -Wall
-HELLO   := sw/hello
-BUILD   := build
-
-all: sw
-
-sw: $(BUILD)/hello.elf $(BUILD)/hello.hex
-
-$(BUILD)/hello.elf: $(HELLO)/crt0.S $(HELLO)/hello.c $(HELLO)/link.ld
-	mkdir -p $(BUILD)
-	$(CROSS)gcc $(CFLAGS) -T $(HELLO)/link.ld $(HELLO)/crt0.S $(HELLO)/hello.c -lgcc -o $@
-	$(CROSS)objdump -d $@ > $(BUILD)/hello.lst
-	$(CROSS)size $@
-
-# Flat image starting at 0x80000000, one little-endian 32-bit word per line,
-# which is what $readmemh in the testbench wants.
-$(BUILD)/hello.hex: $(BUILD)/hello.elf
-	$(CROSS)objcopy -O binary $< $(BUILD)/hello.bin
-	od -An -v -tx4 -w4 $(BUILD)/hello.bin | tr -d ' ' > $@
-
-qemu: $(BUILD)/hello.elf
-	timeout 10 qemu-system-riscv32 -machine virt -bios none -nographic \
-		-kernel $<
-
-$(BUILD)/tb.vvp: sim/tb_femto.v vendor/femtorv32/femtorv32_quark.v
-	mkdir -p $(BUILD)
-	iverilog -g2012 -DBENCH -o $@ $^
-
-sim: $(BUILD)/tb.vvp $(BUILD)/hello.hex
-	cd $(BUILD) && vvp -n tb.vvp +hex=hello.hex $(SIMARGS)
-
-lint:
-	verilator --lint-only -Wall -Wno-fatal -DBENCH vendor/femtorv32/femtorv32_quark.v
-
-clean:
-	rm -rf $(BUILD)
-
-.PHONY: all sw qemu sim lint clean
-
+include common/mk/rules.mk
 endif
