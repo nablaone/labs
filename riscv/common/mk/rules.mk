@@ -85,13 +85,14 @@ list:
 	done
 
 # One line per experiment x program, e.g.
-#   01-femto-quark hello PASS 1190 cycles
+#   01-femto-quark hello PASS 1177 cycles
 compare:
 	@for e in $(EXPS); do \
 		n=$${e%%-*}; \
 		$(MAKE) -s run E=$$n 2>&1 | awk -v e=$$e ' \
 			/^== / { p=$$4 } \
 			/^\[tb\] PASS/ { print e, p, "PASS", $$4, "cycles" } \
+			/^\[tb\] ABORT/ { print e, p, "ABORT", $$7, "cycles" } \
 			/^\[tb\] (FAIL|TIMEOUT)/ { print e, p, $$0 }'; \
 	done
 

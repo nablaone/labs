@@ -137,3 +137,63 @@ deleted.
 
 Next: unchanged from the previous entry (waveform walk-through, then an
 int8 dot-product benchmark in common/sw/ as the baseline).
+
+## 2026-11-25 — [02] custom opcodes: puts rs1 and abort
+
+Goal: see how far the simple core has to change to take new
+instructions. Started with make new E=02 FROM=01 NAME=quark-ops.
+
+Encoding: the custom-0 major opcode, 0x0B, which the RISC-V spec
+reserves for exactly this. R-type layout, with funct3 selecting the
+operation:
+puts rs1 is funct3=000, so puts a0 = 0x0005000b
+abort is funct3=001, giving 0x0000100b
+The assembler doesn't know them. .insn r 0x0B, f3, 0, rd, rs1, rs2
+encodes them, and GNU as macros in exp/02-quark-ops/sw/hello_ops/ops.h
+make "puts a0" and "abort" read like real mnemonics.
+
+What it took in the core. It's 96 added or changed lines, every one
+marked [exp02].
+A decoder fix. Quark decodes JAL from instr[3] alone, an area trick that
+holds only while JAL is the only opcode with bit 3 set. All four custom
+opcodes (0x0B, 0x2B, 0x5B, 0x7B) have bit 3 set, so puts would have run
+as a jump. Replaced it with a full opcode compare. Lesson: minimal cores
+cut decode corners, so check what an unused opcode actually does before
+claiming it.
+Three new one-hot states: PUTS_RD, PUTS_WR and HALT.
+New datapath for puts: a pointer register, a byte selector on
+mem_rdata, two new inputs on the address mux (pointer, PUTS_ADDR), and a
+mux on write-data lane 0.
+Write-back disabled for custom ops, and a new output pin, halted.
+The bus handshakes are respected (PUTS_RD waits for !mem_wbusy), so a
+real, slow UART would still work.
+
+Results:
+In hello_ops, the 17-character line takes 311 cycles with the software
+puts_ and 43 with the hardware puts, 7.2x faster. That's 2 cycles per
+character, against roughly 5 instructions x 3-4 cycles in software.
+hello_ops ends with ABORT at pc 0x8000011c after 1292 cycles.
+Plain hello on 02 is 1177 cycles, identical to 01.
+make lint E=02 is clean, after marking the unused upper bits of the
+byte selector with lint_off.
+
+Bug found on the way, in common: an unaligned .bss. In hello_ops the
+"\n" of the string disappeared in both the software and hardware print,
+which pointed away from the new hardware. Cause: __bss_start was
+0x80000192. crt0 clears .bss with sw, and Quark ignores the low address
+bits of sw, so it zeroed the word at 0x80000190, the last bytes of
+.rodata. Fixed with ALIGN(4) before __bss_start in common/sw/rt/link.ld.
+
+Result change caused by the fix: 01 hello went from 1190 to 1177 cycles.
+hello has no .bss, but with an unaligned start the clear loop still ran
+once and overwrote a harmless 0 byte. Now the loop is skipped, saving
+13 cycles. The 01 README is updated.
+
+make compare now also reports ABORT:
+01-femto-quark hello PASS 1177 cycles
+02-quark-ops hello PASS 1177 cycles
+02-quark-ops hello_ops ABORT 1292 cycles
+
+Ideas this opens up: puts is a tiny DMA engine, a multi-cycle instruction
+that owns the bus. A MAC or dot-product instruction can use the same
+pattern, streaming two int8 vectors from RAM while the FSM loops.

@@ -12,4 +12,5 @@ Testbench: sim/tb.v, which wires the core to common/sim/soc.v. The core
 gets ADDR_WIDTH=32 and RESET_ADDR=0x80000000.
 
 Results (make run E=01):
-hello PASS after 1190 cycles, and the 17-character line takes 314 cycles.
+hello PASS after 1177 cycles (1190 before the .bss alignment fix in
+common/sw/rt/link.ld, see LOG.md), and the 17-character line takes 314 cycles.

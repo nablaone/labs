@@ -54,6 +54,17 @@ Conventions:
   QEMU virt where possible.
 - Quark has no CSRs, traps or ecall. Any SYSTEM opcode returns the cycle
   counter, so firmware must stay bare-metal (see `common/sw/rt/crt0.S`).
+- Custom instructions use the custom-0..3 major opcodes (0x0B, 0x2B, 0x5B,
+  0x7B), R-type, with funct3/funct7 selecting the op. Software reaches them
+  through `.insn` wrapped in GNU as macros in the experiment's own `sw/`
+  header (see `exp/02-quark-ops/sw/hello_ops/ops.h`). QEMU doesn't know
+  them, so such programs are simulator-only. Mark every RTL change
+  against the parent with `[expNN]` comments. Quark's original decoder
+  takes shortcuts (JAL from instr[3]) that alias custom opcodes, so fix
+  decode first.
+- The bench recognises three endings: `[tb] PASS`, `[tb] FAIL` (exit
+  device) and `[tb] ABORT` (a core with a halted pin); `make compare`
+  parses them.
 - It's a learning project. Explain the hardware reasoning in comments and
   docs (datapath, pipeline stages, timing) rather than just writing code.
   The user has an EE/DSP background, so signal-flow and block-diagram
