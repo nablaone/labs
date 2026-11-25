@@ -1,0 +1,87 @@
+{
+  "Pairing": {
+    "AE": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "AR": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+    "BE": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+    "BR": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+    "AQR": "szept1:pWFFWCDYnjuteUN9vtn4Q0GDBPRg_wXH_oH-SpV3qATLk2f_ZmFuZUFsaWNlYXJYIDAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PYXNxaHR0cHM6Ly9hLmV4YW1wbGVhdgE",
+    "BQR": "szept1:pmFFWCA5LRdKOLOxvq-vH-gkhwhBxfpTG8bq_bZALBJGZEiMHGFpUJCRkpOUlZaXmJmam5ydnp9hbmNCb2JhclggcHFyc3R1dnd4eXp7fH1-f4CBgoOEhYaHiImKi4yNjo9hc3FodHRwczovL2IuZXhhbXBsZWF2AQ",
+    "Root": "a340b32c52eb472ab8ee0c15ce2bde784ead3fa7c697c397a859a41f5f490504",
+    "ALo": false,
+    "ASendCK": "3d35b60b5a4b937fda8410b3d2b3f16b7e90b83927475d85ba57f44fc395c169",
+    "ARecvCK": "de53c44964382f18991d3226794416d8367012267d809b60aeec4b487b15cc1e",
+    "ASendMbox": "c7f28addf2fa455f709049723f4e1caf",
+    "ARecvMbox": "d30cc8a43d8a576c5f051662dec8c5b1",
+    "ASendToken": "c84d92daf583e319c091eca7e496a8e55b7775e6bf6252f7d446bb78b479eba2",
+    "ARecvToken": "26c426af8617bac5f8c3ef76c6d7bf5514ce383911a145bbb28bdfcd07cfcc72",
+    "Confirm": [
+      "bargain",
+      "pill",
+      "ginger"
+    ]
+  },
+  "Ratchet": {
+    "CK0": "3d35b60b5a4b937fda8410b3d2b3f16b7e90b83927475d85ba57f44fc395c169",
+    "MK": [
+      "5ac8fb9127204aa4be6acba9466d9e09af94a4846d0ba0472f26317eeca5dd11",
+      "060e79accca20af599ae75361feecdb35e00ae1a23bebab93e16e4d56e93e475",
+      "8e31aa155ec5791f75b443c2fd07cf5ee3477a50aefe53293fc92a33d42b15a6"
+    ],
+    "CK3": "20e867f0e83bd13b7b008d29893d610ef827dded9b481eedb9b4cd392b891a0e",
+    "MsgKey0": "273652aa6cd5f3805e01579bb3eee2ae75d7bda273d81ba112e2bcae4c8185cd",
+    "MsgNonce0": "74a6e5388f1d7aed0b6eca578c042c3010af8d68bb20d26d"
+  },
+  "Pairwise": {
+    "Plaintext": "a46174647465787462696450a0a1a2a3a4a5a6a7a8a9aaabacadaeaf6274731b0000018bcfe5680064626f647967637a65c59bc487",
+    "Envelope": "0100000000765f82048a2a88de1395dd86de5b2394ea640e38dbcd42850112ac819d0cd1f35da59571c6ecab246361c55005686afade02d49dd07111488a839e8bf0d5d5164300205af29ec9ff4c372f7059d0c61190396889c1d4546e8362d51a27ea75036aaabd651da8d811961efab89d5f55ecd4a5edbbd227b1d475aa75100f4e172a30d6c5241ad6d3302b59daddb43c36b6ed8626cc2cc6aa17f0c2aa0a59a48d42ee91af7af6b3a5fb0e00b051637d9b5aa5a416798b83a21f2ad81044b529d49a3f385e39810c3c057ed96f6b204b2f1eb8cd98029cf72b232a871c8355f0f9b534c47b3826b58f885c53a0bec6dd49b5ed173a1aa884d8e53ca1a0c0cb18f005b8aab9b1fa2305124d66a01ddfa19053"
+  },
+  "Group": {
+    "GK": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "GID": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "CK0": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "SSeed": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "Epoch": 3,
+    "Hint": "5ed12110bcf36f64",
+    "Plaintext": "a56174647465787462696450c0c1c2c3c4c5c6c7c8c9cacbcccdcecf6274731b0000018bcfe568006367696450d0d1d2d3d4d5d6d7d8d9dadbdcdddedf64626f64796368656a",
+    "Envelope": "025ed12110bcf36f6400000000345b0ef2737553f789ca6b1adfdfc892184b63b527e63e85deccdd43fada56eff53046e603feff6364d5a2150502ae14256045921b12877480121ff5f086b3992af401458933cd8626bea33b46589cd6bf1e31d5c870a94f79edb2a2b05af9ed34af8b10c6453e45e03e750945686dd4ba784383aba420c4873506afbca3e33a86ef352114a8a569d319bdaf12f9039bdfd7b46603c2981aa291647eaec046f32442f64338ad5378a889ec22b2de5ebfcdbfca2590e1dc8000c06541b554fa0ce3cd7181a7ae9663a5911cb88b1949152beb94612a51f24447610e5bdb3d5524407e9b0a748e0685b6dc913bc26aa848ada14e4ded68e7cfe6d39957a8df7cbf16503f7dd4bfd56f7563cb4afe83cf923b6df3897d620623b2f0fd2d5613c591f88127e47e4020eb6ea401ed8d7c284abf9aed1ae032b9a7654cdc0c613c7336863195fc9983177315974853d0c5574f"
+  },
+  "KillCode": {
+    "Input": "  Abandon ability able ABOUT above   absent ",
+    "Hash": "2469ad431931c2bfc898b7e1fa48acb423aea066b6f4bd2755f2458203b11ef0"
+  },
+  "File": {
+    "Key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "Cases": [
+      {
+        "Size": 0,
+        "CipherSize": 16,
+        "CipherSHA256": "a06ccc8f86ef6dbbaf2fc7d31f4003792895e0e0021c8c6ee6985526eaf86d7b"
+      },
+      {
+        "Size": 1,
+        "CipherSize": 17,
+        "CipherSHA256": "e38ae955a4aaf3edb9ba739ff5fad68cb51110a0bd01b853c21245d8e23abb4e"
+      },
+      {
+        "Size": 65535,
+        "CipherSize": 65551,
+        "CipherSHA256": "b0fe883cfe776ffd6b8324dd7b92c6aac72a44b60abc87307a2484740cf432ba"
+      },
+      {
+        "Size": 65536,
+        "CipherSize": 65552,
+        "CipherSHA256": "e3c071762747802d50e85a697d0092e2b07b06e592e66d668af20b7d5dcf5a93"
+      },
+      {
+        "Size": 65537,
+        "CipherSize": 65569,
+        "CipherSHA256": "5b1e0593c4ac871485cc3f2957f786db27b620191b4ceea8dbc5352880a8e1a9"
+      },
+      {
+        "Size": 196708,
+        "CipherSize": 196772,
+        "CipherSHA256": "289a1d56b2a574941ea233c82cf7662945dcf5f2d0d5243ac95cacf2aeaa007f"
+      }
+    ]
+  }
+}
