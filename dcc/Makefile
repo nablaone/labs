@@ -3,7 +3,7 @@ IDF_TARGET ?= esp32c3
 APP_DIR := $(CURDIR)
 BUILD_DIR := build
 
-.PHONY: image build monitor shell flash clean web
+.PHONY: image build monitor shell flash clean web asm
 
 image:
 	docker build -t $(IMAGE) .
@@ -56,6 +56,12 @@ shell: image
 # in Chrome or Edge. Bound to 127.0.0.1 so it isn't exposed on the LAN.
 web:
 	python3 -m http.server 8000 --bind 127.0.0.1 --directory web
+
+# RISC-V listings of our own code (main/*.c) from the linked firmware,
+# with the C source interleaved: asm/<module>.s. Walk-through in
+# docs/riscv-asm.md.
+asm: build
+	docker run --rm -v $(APP_DIR):/app -w /app $(IMAGE) bash tools/asm.sh
 
 clean:
 	rm -rf $(BUILD_DIR) sdkconfig sdkconfig.old

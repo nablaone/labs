@@ -46,6 +46,7 @@ make build              # docker build + idf.py build
 make flash              # esptool over USB-serial (PORT auto-detected)
 make monitor            # minicom 115200, Ctrl-A X to quit
 make shell              # interactive shell in the IDF container
+make asm                # RISC-V listings of main/*.c into asm/, see docs/riscv-asm.md
 ```
 
 Override the port with `PORT=/dev/cu.usbmodemXXXX` if needed. If flashing
